@@ -29,13 +29,13 @@ type Job =
         LastUpdated: DateTime
     }
 
-let create func =
+let create func type' onlyRunAfter =
     {
         Id = Guid.NewGuid()
         SerializedTask = Evaluator.serialize func
-        Type = Single
+        Type = type'
         Status = Waiting
-        OnlyRunAfter = None
+        OnlyRunAfter = onlyRunAfter
         LastUpdated = DateTime.Now
     }
 

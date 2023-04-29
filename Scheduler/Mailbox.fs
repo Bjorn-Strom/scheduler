@@ -25,10 +25,7 @@ module Mailbox =
     // TODO: Options som CE?
     type Scheduler<'t> (dataLayer: IDataLayer<'t>, OnlyRunAfter: DateTime option, maxJobs: int, evaluator: 't -> unit) = // TODO TA INN OPTIONS? OnCompletedJob callback? Iaf maxjobs
         let mutable inFlight = 0
-        // TODO: Kø er litt problematisk
-        // TODO: Dersom køa er full, men alle jobbene i køa skal kjøres om 3 dager vil ingen som skal kjøre NÅ kjøres
-        // TODO: Hva med den nye priority køa til C#, prioriter etter kortest tid
-        let queue = Queue<Job>()
+        let queue = PriorityQueue<Job, DateTime option>()
 
         let _ = MailboxProcessor.Start(fun inbox ->
             let rec loop () =
@@ -45,7 +42,7 @@ module Mailbox =
                         inFlight <- inFlight - 1
                     | QueueJobs jobs ->
                         queue.Clear ()
-                        List.iter queue.Enqueue jobs
+                        List.iter (fun j -> queue.Enqueue(j, j.OnlyRunAfter)) jobs
 
                     let rec dequeue () =
                         if (inFlight < maxJobs && queue.Count > 0) then
