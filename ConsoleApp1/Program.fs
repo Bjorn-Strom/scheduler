@@ -1,4 +1,5 @@
-﻿open System.Threading
+﻿open System
+open System.Threading
 open Scheduler
 
 type Person = { Name : string }
@@ -21,7 +22,6 @@ let evaluate job =
         Thread.Sleep(1000)
         sendMailToPerson p
 
-//
 type Fakabase() =
     let mutable store: Job.Job list = []
     interface DataLayer.IDataLayer<Foo> with
@@ -30,25 +30,39 @@ type Fakabase() =
             store <- store @ [newJob]
         member this.Get(dateTime) =
             store
-            |> List.filter (fun j -> j.Status = Job.Waiting)
-        member this.Update(job: Job.Job) =
+            |> List.filter (fun j ->
+                if dateTime.IsNone || j.OnlyRunAfter.IsNone then
+                    j.Status = Job.Waiting
+                else
+                    j.Status = Job.Waiting &&
+                    (j.OnlyRunAfter.IsSome &&
+                    j.OnlyRunAfter.Value > dateTime.Value)
+            )
+        member this.SetDone(job: Job.Job) =
             store <-
                 store
                 |> List.map (fun j ->
                     if j.Id = job.Id then
-                        { j with Status = Job.Done }
+                        { j with Status = Job.Done; LastUpdated = DateTime.Now }
                     else j)
         member this.SetInFlight(job) =
             store <-
                 store
                 |> List.map (fun j ->
                     if j.Id = job.Id then
-                        { j with Status = Job.InFlight }
+                        { j with Status = Job.InFlight; LastUpdated = DateTime.Now }
+                    else j)
+        member this.SetFailed(job: Job.Job) =
+            store <-
+                store
+                |> List.map (fun j ->
+                    if j.Id = job.Id then
+                        { j with Status = Job.Failed; LastUpdated = DateTime.Now }
                     else j)
 
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
 
-let scheduler = Mailbox.Scheduler<Foo> (fakabase, 1, evaluate)
+let scheduler = Mailbox.Scheduler<Foo> (fakabase, (Some DateTime.Now), 1, evaluate)
 
 for i in 0 .. 10 do
     let add = Add(0, i)
@@ -57,4 +71,4 @@ for i in 0 .. 10 do
         fakabase.Register hi
     fakabase.Register add
 
-System.Console.ReadKey()
+Console.ReadKey() |> ignore
