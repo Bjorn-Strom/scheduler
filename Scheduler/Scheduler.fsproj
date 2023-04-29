@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net6.0</TargetFramework>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Evaluator.fs" />
+        <Compile Include="Job.fs" />
+        <Compile Include="DataLayer.fs" />
+        <Compile Include="Mailbox.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="FsPickler.Json" Version="5.3.2" />
+      <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    </ItemGroup>
+
+</Project>
