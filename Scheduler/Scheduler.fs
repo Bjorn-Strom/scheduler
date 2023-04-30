@@ -3,12 +3,12 @@
 open System
 open System.Collections.Generic
 open System.Threading.Tasks
-open DataLayer
 open Microsoft.FSharp.Control
 
 [<RequireQualifiedAccess>]
 module Scheduler =
     open Job
+    open DataLayer.DataLayer
 
     type internal Message =
         | Completed of Job
