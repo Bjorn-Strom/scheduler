@@ -25,7 +25,7 @@ let evaluate job =
 type Fakabase() =
     let mutable store: Job.Job list = []
     interface DataLayer.IDataLayer<Foo> with
-        member this.Create() = ()
+        member this.Setup() = ()
         member this.Register foo =
             let newJob = Job.create foo Job.Single None
             store <- store @ [newJob]
@@ -75,7 +75,7 @@ type Fakabase() =
 
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
 
-let scheduler = Mailbox.Scheduler<Foo> (fakabase, TimeSpan.FromSeconds(1), (Some DateTime.Now), 1, evaluate)
+let scheduler = Mailbox.Scheduler<Foo> (fakabase, TimeSpan.FromSeconds(1), (Some DateTime.Now), Some 1, evaluate)
 
 for i in 0 .. 10 do
     fakabase.Schedule (Hi { Name = "SHOULD NEVER PRINT" }) (Some (DateTime.Now.AddDays 7))
@@ -85,5 +85,11 @@ for i in 0 .. 10 do
         fakabase.Register hi
     fakabase.Register add
     Thread.Sleep(2)
-
+//
+//
+// Mailbox.testBuilder<Foo> () {
+//     use_datalayer fakabase
+// }
+//
+//
 Console.ReadKey() |> ignore

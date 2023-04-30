@@ -5,7 +5,7 @@ open System.Data
 
 type IDataLayer<'t> =
     // Does any required setup like creating tables in database
-    abstract member Create: unit -> unit
+    abstract member Setup: unit -> unit
 
     // Registering must add the item 't into the pool of jobs
     // This job will be performed ASAP.
