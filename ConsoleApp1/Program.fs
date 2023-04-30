@@ -33,9 +33,10 @@ type Fakabase() =
             let newJob = Job.create foo Job.Single shouldRunAfter
             store <- store @ [newJob]
         member this.Repeat foo interval =
+            printf $"Interval needs to be used: %A{interval}"
             let newJob = Job.create foo Job.Recurring None
             store <- store @ [newJob]
-        member this.Get(dateTime) =
+        member this.Get dateTime =
             store
             |> List.filter (fun j ->
                 if dateTime.IsNone || j.OnlyRunAfter.IsNone then
@@ -45,21 +46,21 @@ type Fakabase() =
                     (j.OnlyRunAfter.IsSome &&
                     dateTime.Value > j.OnlyRunAfter.Value)
             )
-        member this.SetDone(job: Job.Job) =
+        member this.SetDone job =
             store <-
                 store
                 |> List.map (fun j ->
                     if j.Id = job.Id then
                         { j with Status = Job.Done; LastUpdated = DateTime.Now }
                     else j)
-        member this.SetInFlight(job) =
+        member this.SetInFlight job =
             store <-
                 store
                 |> List.map (fun j ->
                     if j.Id = job.Id then
                         { j with Status = Job.InFlight; LastUpdated = DateTime.Now }
                     else j)
-        member this.SetFailed(job: Job.Job) =
+        member this.SetFailed job =
             store <-
                 store
                 |> List.map (fun j ->
@@ -67,15 +68,19 @@ type Fakabase() =
                         { j with Status = Job.Failed; LastUpdated = DateTime.Now }
                     else j)
 
-        member this.RegisterSafe(var0) (var1) = failwith "todo"
-        member this.RepeatSafe(var0) (var1) (var2) = failwith "todo"
-        member this.ScheduleSafe(var0) (var1) (var2) = failwith "todo"
-
-
+        member this.RegisterSafe _ _ = failwith "todo"
+        member this.RepeatSafe _ _ _ = failwith "todo"
+        member this.ScheduleSafe _ _ _ = failwith "todo"
 
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
 
-let scheduler = Mailbox.Scheduler<Foo> (fakabase, TimeSpan.FromSeconds(1), (Some DateTime.Now), Some 1, evaluate)
+schedulerBuilder<Foo> () {
+    with_datalayer fakabase
+    with_polling_interval (TimeSpan.FromSeconds 1)
+    with_polling_window DateTime.Now
+    with_max_jobs 1
+    with_evaluator evaluate
+}
 
 for i in 0 .. 10 do
     fakabase.Schedule (Hi { Name = "SHOULD NEVER PRINT" }) (Some (DateTime.Now.AddDays 7))
@@ -85,11 +90,5 @@ for i in 0 .. 10 do
         fakabase.Register hi
     fakabase.Register add
     Thread.Sleep(2)
-//
-//
-// Mailbox.testBuilder<Foo> () {
-//     use_datalayer fakabase
-// }
-//
-//
+
 Console.ReadKey() |> ignore

@@ -9,7 +9,7 @@
         <Compile Include="Evaluator.fs" />
         <Compile Include="Job.fs" />
         <Compile Include="DataLayer.fs" />
-        <Compile Include="Mailbox.fs" />
+        <Compile Include="Scheduler.fs" />
     </ItemGroup>
 
     <ItemGroup>

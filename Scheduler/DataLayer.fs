@@ -25,6 +25,7 @@ type IDataLayer<'t> =
     // This job will be repeated at a certain interval
     // If the pool was a list it should be added to it: pool <- pool @ 't
     // If it is a database table it should be added to that table
+    // TODO: MÅ FIKSE INTERVAL
     abstract member Repeat: 't -> unit -> unit
     abstract member RepeatSafe: 't -> unit -> IDbTransaction -> unit
 
@@ -43,4 +44,19 @@ type IDataLayer<'t> =
     // Updates a specific job and marks it as failed
     // Should update last updated
     abstract member SetFailed: Job.Job -> unit
+
+let empty(): IDataLayer<'t> = {
+    new IDataLayer<'t> with
+        member this.Setup() = ()
+        member this.Register var0 = ()
+        member this.Schedule var0 var1 = ()
+        member this.Repeat var0 var1 = ()
+        member this.Get var0 = []
+        member this.SetDone var0 = ()
+        member this.SetInFlight var0 = ()
+        member this.SetFailed var0 = ()
+        member this.RegisterSafe var0 var1 = ()
+        member this.RepeatSafe var0 var1 var2 = ()
+        member this.ScheduleSafe var0 var1 var2 = ()
+}
 
