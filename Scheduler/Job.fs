@@ -15,16 +15,13 @@ type Status =
     | InFlight
     | Failed
 
+// TODO: Trenger noe for å sette recurring her
 type Job =
     {
         Id: Guid
         SerializedTask: string
         Type: Type
         Status: Status
-         // TODO: hva er et godt uttrykk for NÅR noe skal gjøres?
-         // TODO: Dersom den er Single vil vi kun kjøre den engang, kanskje et tidspunkt?
-         // TODO: Dersom den er recurring så annenhver dag? CRON?
-         // TODO: Kanskje denne skal være optional? Some tid -> kjør da, None -> kjør nå
         OnlyRunAfter: DateTime option
         LastUpdated: DateTime
     }

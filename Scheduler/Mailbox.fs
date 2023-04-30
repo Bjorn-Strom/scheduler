@@ -10,16 +10,19 @@ module Mailbox =
     open DataLayer
 
     type internal Message =
-        | Complete of Job
+        | Completed of Job
         | Failed of Job
         | QueueJobs of Job list
 
     let internal processJob (inbox: MailboxProcessor<Message>) (job: Job) evaluator =
         let task = new Task(fun _ ->
-            job.SerializedTask
-            |> Evaluator.deserialize
-            |> evaluator
-            Complete job |> inbox.Post
+            try
+                job.SerializedTask
+                |> Evaluator.deserialize
+                |> evaluator
+                Completed job |> inbox.Post
+            with
+                | _ -> Failed job |> inbox.Post
         )
         task.Start()
 
@@ -46,7 +49,7 @@ module Mailbox =
                         Async.Start (poll inbox pollingInterval)
                     let! message = inbox.Receive()
                     match message with
-                    | Complete job ->
+                    | Completed job ->
                         dataLayer.SetDone job
                         inFlight <- inFlight - 1
                     | Failed job ->
