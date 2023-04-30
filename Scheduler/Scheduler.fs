@@ -45,6 +45,9 @@ module Scheduler =
         member _.Yield _: SchedulerSpec<'t> = empty<'t>()
 
         member _.Run(config: SchedulerSpec<'t>) =
+            // Setup datalayer
+            config.DataLayer.Setup()
+
             let mutable polling = false
             let mutable inFlight = 0
             // TODO: TEst at prio køa funker om man har ting med forskjellig prioritet i køa
