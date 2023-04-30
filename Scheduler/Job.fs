@@ -2,9 +2,6 @@ module Job
 
 open System
 
-// TODO: Scheduler burde lese køa inn fra en database (hvordan den tabellen populeres blir database spesifikke biblioteker? SqLite, MSSQL...?)
-// TODO: Databasen bør leses periodisk og køa burde oppdateres
-// TODO: Hva om funksjonen thrower? Fault tolerant mailbox? Les opp på at-least once
 type Type =
     | Recurring
     | Single
