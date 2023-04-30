@@ -63,7 +63,7 @@ type Fakabase() =
 
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
 
-let scheduler = Mailbox.Scheduler<Foo> (fakabase, (Some DateTime.Now), 1, evaluate)
+let scheduler = Mailbox.Scheduler<Foo> (fakabase, TimeSpan.FromSeconds(1), (Some DateTime.Now), 1, evaluate)
 
 for i in 0 .. 10 do
     fakabase.Register (Hi { Name = "SHOULD NEVER PRINT" }) (Some (DateTime.Now.AddDays 7)) Job.Single
@@ -72,5 +72,6 @@ for i in 0 .. 10 do
         let hi = Hi { Name = $"Name: {i}" }
         fakabase.Register hi None Job.Single
     fakabase.Register add None Job.Single
+    Thread.Sleep(2)
 
 Console.ReadKey() |> ignore

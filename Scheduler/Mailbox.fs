@@ -3,6 +3,7 @@
 open System
 open System.Collections.Generic
 open System.Threading.Tasks
+open Microsoft.FSharp.Control
 
 module Mailbox =
     open Job
@@ -22,16 +23,27 @@ module Mailbox =
         )
         task.Start()
 
+
     // TODO: Options som CE?
-    type Scheduler<'t> (dataLayer: IDataLayer<'t>, OnlyRunAfter: DateTime option, maxJobs: int, evaluator: 't -> unit) = // TODO TA INN OPTIONS? OnCompletedJob callback? Iaf maxjobs
+    type Scheduler<'t> (dataLayer: IDataLayer<'t>, pollingInterval: TimeSpan, OnlyRunAfter: DateTime option, maxJobs: int, evaluator: 't -> unit) = // TODO TA INN OPTIONS? OnCompletedJob callback? Iaf maxjobs
+        let mutable polling = false
         let mutable inFlight = 0
+        // TODO: TEst at prio køa funker om man har ting med forskjellig prioritet i køa
         let queue = PriorityQueue<Job, DateTime option>()
+
+        let rec poll (inbox: MailboxProcessor<Message>) (pollingInterval: TimeSpan) =
+            async {
+                do! Async.Sleep(pollingInterval)
+                inbox.Post(QueueJobs (dataLayer.Get OnlyRunAfter))
+                polling <- false
+            }
 
         let _ = MailboxProcessor.Start(fun inbox ->
             let rec loop () =
                 async {
-                    // TODO: Henter alt for ofte. Dette må man kunne tweake
-                    inbox.Post(QueueJobs (dataLayer.Get OnlyRunAfter))
+                    if not polling then
+                        polling <- true
+                        Async.Start (poll inbox pollingInterval)
                     let! message = inbox.Receive()
                     match message with
                     | Complete job ->
