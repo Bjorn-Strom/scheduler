@@ -1,6 +1,7 @@
 module DataLayer
 
 open System
+open System.Data
 
 type IDataLayer<'t> =
     // Does any required setup like creating tables in database
@@ -11,18 +12,21 @@ type IDataLayer<'t> =
     // If the pool was a list it should be added to it: pool <- pool @ 't
     // If it is a database table it should be added to that table
     abstract member Register: 't -> unit
+    abstract member RegisterSafe: 't -> IDbTransaction -> unit
 
     // Schedule must add the item 't into the pool of jobs
     // This job will be performed at a given time
     // If the pool was a list it should be added to it: pool <- pool @ 't
     // If it is a database table it should be added to that table
     abstract member Schedule: 't -> DateTime option -> unit
+    abstract member ScheduleSafe: 't -> DateTime option -> IDbTransaction -> unit
 
     // Repeat must add the item 't into the pool of jobs
     // This job will be repeated at a certain interval
     // If the pool was a list it should be added to it: pool <- pool @ 't
     // If it is a database table it should be added to that table
     abstract member Repeat: 't -> unit -> unit
+    abstract member RepeatSafe: 't -> unit -> IDbTransaction -> unit
 
     // Get should get all jobs in the pool.
     // If a datetime is supplied then get all jobs where the OnlyRunAfter date is after the date supplied

@@ -67,6 +67,10 @@ type Fakabase() =
                         { j with Status = Job.Failed; LastUpdated = DateTime.Now }
                     else j)
 
+        member this.RegisterSafe(var0) (var1) = failwith "todo"
+        member this.RepeatSafe(var0) (var1) (var2) = failwith "todo"
+        member this.ScheduleSafe(var0) (var1) (var2) = failwith "todo"
+
 
 
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
