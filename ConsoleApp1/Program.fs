@@ -25,8 +25,15 @@ let evaluate job =
 type Fakabase() =
     let mutable store: Job.Job list = []
     interface DataLayer.IDataLayer<Foo> with
-        member this.Register foo shouldRunAfter type' =
-            let newJob = Job.create foo type' shouldRunAfter
+        member this.Create() = ()
+        member this.Register foo =
+            let newJob = Job.create foo Job.Single None
+            store <- store @ [newJob]
+        member this.Schedule foo shouldRunAfter =
+            let newJob = Job.create foo Job.Single shouldRunAfter
+            store <- store @ [newJob]
+        member this.Repeat foo interval =
+            let newJob = Job.create foo Job.Recurring None
             store <- store @ [newJob]
         member this.Get(dateTime) =
             store
@@ -61,17 +68,18 @@ type Fakabase() =
                     else j)
 
 
+
 let fakabase = Fakabase() :> DataLayer.IDataLayer<Foo>
 
 let scheduler = Mailbox.Scheduler<Foo> (fakabase, TimeSpan.FromSeconds(1), (Some DateTime.Now), 1, evaluate)
 
 for i in 0 .. 10 do
-    fakabase.Register (Hi { Name = "SHOULD NEVER PRINT" }) (Some (DateTime.Now.AddDays 7)) Job.Single
+    fakabase.Schedule (Hi { Name = "SHOULD NEVER PRINT" }) (Some (DateTime.Now.AddDays 7))
     let add = Add(0, i)
     if i > 0 && i % 2 = 0 then
         let hi = Hi { Name = $"Name: {i}" }
-        fakabase.Register hi None Job.Single
-    fakabase.Register add None Job.Single
+        fakabase.Register hi
+    fakabase.Register add
     Thread.Sleep(2)
 
 Console.ReadKey() |> ignore
