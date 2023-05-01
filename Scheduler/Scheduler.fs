@@ -18,7 +18,7 @@ module Scheduler =
     let internal processJob (inbox: MailboxProcessor<Message>) (job: Job) evaluator =
         let task = new Task(fun _ ->
             try
-                job.SerializedTask
+                job.Task
                 |> Evaluator.deserialize
                 |> evaluator
                 Completed job |> inbox.Post
@@ -30,14 +30,12 @@ module Scheduler =
     type SchedulerSpec<'t> =
         { DataLayer: IDataLayer<'t>
           PollingInterval: TimeSpan
-          PollingWindow: DateTime option
           MaxJobs: int option
           Evaluator: 't -> unit }
 
     let empty<'t> (): SchedulerSpec<'t> =
         { DataLayer = empty()
           PollingInterval = TimeSpan.FromSeconds 0
-          PollingWindow = None
           MaxJobs = None
           Evaluator = fun _ -> () }
 
@@ -45,18 +43,14 @@ module Scheduler =
         member _.Yield _: SchedulerSpec<'t> = empty<'t>()
 
         member _.Run(config: SchedulerSpec<'t>) =
-            // Setup datalayer
-            config.DataLayer.Setup()
-
             let mutable polling = false
             let mutable inFlight = 0
-            // TODO: TEst at prio køa funker om man har ting med forskjellig prioritet i køa
             let queue = PriorityQueue<Job, DateTime option>()
 
             let rec poll (inbox: MailboxProcessor<Message>) (pollingInterval: TimeSpan) =
                 async {
                     do! Async.Sleep(pollingInterval)
-                    inbox.Post(QueueJobs (config.DataLayer.Get config.PollingWindow))
+                    inbox.Post(QueueJobs (config.DataLayer.Get (Some DateTime.Now)))
                     polling <- false
                 }
 
@@ -107,10 +101,6 @@ module Scheduler =
         [<CustomOperation("with_polling_interval")>]
         member x.PollingInterval (config: SchedulerSpec<'t>, pollingInterval: TimeSpan) =
             { config with PollingInterval = pollingInterval  }
-
-        [<CustomOperation("with_polling_window")>]
-        member x.PollingWindow (config: SchedulerSpec<'t>, ?pollingWindow: DateTime) =
-            { config with PollingWindow =  pollingWindow  }
 
         [<CustomOperation("with_max_jobs")>]
         member x.MaxJobs (config: SchedulerSpec<'t>, ?maxJobs: int) =

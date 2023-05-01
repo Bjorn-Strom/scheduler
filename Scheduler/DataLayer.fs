@@ -19,16 +19,8 @@ module DataLayer =
         // This job will be performed at a given time
         // If the pool was a list it should be added to it: pool <- pool @ 't
         // If it is a database table it should be added to that table
-        abstract member Schedule: 't -> DateTime option -> unit
-        abstract member ScheduleSafe: 't -> DateTime option -> IDbTransaction -> unit
-
-        // Repeat must add the item 't into the pool of jobs
-        // This job will be repeated at a certain interval
-        // If the pool was a list it should be added to it: pool <- pool @ 't
-        // If it is a database table it should be added to that table
-        // TODO: MÅ FIKSE INTERVAL
-        abstract member Repeat: 't -> unit -> unit
-        abstract member RepeatSafe: 't -> unit -> IDbTransaction -> unit
+        abstract member Schedule: 't -> DateTime -> unit
+        abstract member ScheduleSafe: 't -> DateTime -> IDbTransaction -> unit
 
         // Get should get all jobs in the pool.
         // If a datetime is supplied then get all jobs where the OnlyRunAfter date is after the date supplied
@@ -48,16 +40,14 @@ module DataLayer =
 
     let empty(): IDataLayer<'t> = {
         new IDataLayer<'t> with
-            member this.Setup() = ()
+            member this.Setup () = ()
             member this.Register var0 = ()
             member this.Schedule var0 var1 = ()
-            member this.Repeat var0 var1 = ()
             member this.Get var0 = []
             member this.SetDone var0 = ()
             member this.SetInFlight var0 = ()
             member this.SetFailed var0 = ()
             member this.RegisterSafe var0 var1 = ()
-            member this.RepeatSafe var0 var1 var2 = ()
             member this.ScheduleSafe var0 var1 var2 = ()
     }
 

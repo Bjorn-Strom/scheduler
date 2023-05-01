@@ -4,16 +4,12 @@ module InMemory =
     type InMemory<'t>() =
         let mutable store: Job.Job list = []
         interface DataLayer.IDataLayer<'t> with
-            member this.Setup() = ()
+            member this.Setup () = ()
             member this.Register foo =
-                let newJob = Job.create foo Job.Single None
+                let newJob = Job.create foo None
                 store <- store @ [newJob]
             member this.Schedule foo shouldRunAfter =
-                let newJob = Job.create foo Job.Single shouldRunAfter
-                store <- store @ [newJob]
-            member this.Repeat foo interval =
-                printf $"Interval needs to be used: %A{interval}"
-                let newJob = Job.create foo Job.Recurring None
+                let newJob = Job.create foo (Some shouldRunAfter)
                 store <- store @ [newJob]
             member this.Get dateTime =
                 store
@@ -48,8 +44,9 @@ module InMemory =
                         else j)
 
             member this.RegisterSafe _ _ = failwith "todo"
-            member this.RepeatSafe _ _ _ = failwith "todo"
             member this.ScheduleSafe _ _ _ = failwith "todo"
 
     let create<'t> () =
-        InMemory<'t>() :> DataLayer.IDataLayer<'t>
+        let datalayer = InMemory<'t>() :> DataLayer.IDataLayer<'t>
+        datalayer.Setup()
+        datalayer

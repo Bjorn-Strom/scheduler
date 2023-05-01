@@ -6,15 +6,17 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Include="Evaluator.fs" />
+        <Compile Include="Serializer.fs" />
         <Compile Include="Job.fs" />
         <Compile Include="DataLayer.fs" />
         <Compile Include="InMemory.fs" />
+        <Compile Include="MSSQL.fs" />
         <Compile Include="Scheduler.fs" />
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="FsPickler.Json" Version="5.3.2" />
+      <PackageReference Include="Dapper" Version="2.0.123" />
+      <PackageReference Include="Microsoft.Data.SqlClient" Version="5.1.1" />
       <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     </ItemGroup>
 
