@@ -5,7 +5,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Scheduler", "Scheduler\Scheduler.fsproj", "{2695D234-3C1B-42AE-A860-71AE2243230D}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "ConsoleApp1", "ConsoleApp1\ConsoleApp1.fsproj", "{202375E8-45AD-43D6-A2D8-FA23B7921504}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Example", "Example\Example.fsproj", "{202375E8-45AD-43D6-A2D8-FA23B7921504}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

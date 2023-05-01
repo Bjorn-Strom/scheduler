@@ -22,8 +22,8 @@ connection.Open()
 // let dataLayer = DataLayer.InMemory.create<ExampleReducer>()
 let dataLayer = DataLayer.MSSQL.create<ExampleReducer>(connection)
 
-let evaluate (datalayer: IDataLayer<ExampleReducer>) job =
-    match job with
+let evaluate (datalayer: IDataLayer<ExampleReducer>) reducer =
+    match reducer with
     | Add (x, y) ->
         printfn $"We added %d{x} and %d{y} and got %d{add x y}"
     | Print m ->
