@@ -13,16 +13,21 @@ type Status =
 
     static member Deserialize(s: string) =
         match s with
-        | nameof Done -> Done
-        | nameof Waiting -> Waiting
-        | nameof InFlight -> InFlight
-        | nameof Failed -> Failed
+        | nameof Done -> Ok Done
+        | nameof Waiting -> Ok Waiting
+        | nameof InFlight -> Ok InFlight
+        | nameof Failed -> Ok Failed
+        | _ -> Error $"Invalid status: '{s}'"
 
 type StatusHandler() =
     inherit SqlMapper.TypeHandler<Status>()
 
-    override __.Parse(value) = Status.Deserialize(string value)
-    override __.SetValue(p, value) =
+    override _.Parse(value) =
+        match Status.Deserialize(string value) with
+        | Ok status -> status
+        | Error e -> failwith e
+
+    override _.SetValue(p, value) =
         p.DbType <- Data.DbType.String
         p.Size <- 16
         p.Value <- Status.Serialize value

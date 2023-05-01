@@ -1,9 +1,5 @@
 namespace DataLayer
 
-// TODO: Make safe -> results i ytterpunkter. Inn fra DB
-// TODO: Når connection open?
-// TODO: README
-
 open System
 open System.Data
 open Dapper
