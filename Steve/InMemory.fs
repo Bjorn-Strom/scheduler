@@ -1,5 +1,7 @@
 namespace DataLayer
 
+open System
+
 module InMemory =
     type InMemory<'t>() =
         let mutable store: Job.Job list = []
@@ -11,15 +13,13 @@ module InMemory =
             member this.Schedule foo shouldRunAfter =
                 let newJob = Job.create foo (Some shouldRunAfter)
                 store <- store @ [newJob]
-            member this.Get dateTime =
+            member this.Poll () =
                 store
                 |> List.filter (fun j ->
-                    if dateTime.IsNone || j.OnlyRunAfter.IsNone then
-                        j.Status = Job.Waiting
-                    else
+                    j.Status = Job.Waiting ||
                         j.Status = Job.Waiting &&
                         (j.OnlyRunAfter.IsSome &&
-                        dateTime.Value > j.OnlyRunAfter.Value)
+                        DateTime.Now > j.OnlyRunAfter.Value)
                 )
             member this.SetDone job =
                 store <-
@@ -43,8 +43,12 @@ module InMemory =
                             { j with Status = Job.Failed; LastUpdated = System.DateTime.Now }
                         else j)
 
-            member this.RegisterSafe _ _ = failwith "todo"
-            member this.ScheduleSafe _ _ _ = failwith "todo"
+            member this.RegisterSafe foo _ =
+                let newJob = Job.create foo None
+                store <- store @ [newJob]
+            member this.ScheduleSafe foo shouldRunAfter _ =
+                let newJob = Job.create foo (Some shouldRunAfter)
+                store <- store @ [newJob]
 
     let create<'t> () =
         let datalayer = InMemory<'t>() :> DataLayer.IDataLayer<'t>

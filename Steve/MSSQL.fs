@@ -6,12 +6,13 @@ open Dapper
 open Microsoft.Data.SqlClient
 
 module MSSQL =
-    type private Connection =
-        | Connection of IDbConnection
-        | Transaction of IDbTransaction
+    type MSSQL<'t>(connectionString: string) =
+        let connection =
+            let connection = new SqlConnection(connectionString)
+            connection.Open()
+            connection
 
-    type MSSQL<'t>(connection: SqlConnection) =
-        let insertJob (connection: Connection) (job: Job.Job) =
+        let insertJob (transaction: IDbTransaction option) (job: Job.Job) =
             let sql = "
                 INSERT INTO Scheduled_Jobs (Id, Task, Status, OnlyRunAfter, LastUpdated)
                 VALUES (@Id, @Task, @Status, @OnlyRunAfter, @LastUpdated)
@@ -27,11 +28,11 @@ module MSSQL =
                         null
                 LastUpdated = DateTime.Now
             |}
-            match connection with
-            | Connection connection ->
-                connection.Execute(sql, parameters) |> ignore
-            | Transaction transaction ->
+            match transaction with
+            | Some transaction ->
                 transaction.Connection.Execute(sql, parameters, transaction) |> ignore
+            | None ->
+                connection.Execute(sql, parameters) |> ignore
 
         let updateStatus (jobId: Guid) (status: Job.Status) =
             let sql = "
@@ -64,7 +65,7 @@ module MSSQL =
                 "
                 connection.Execute(sql) |> ignore
 
-            member this.Get now =
+            member this.Poll () =
                 let sql = "
                     SELECT *
                     FROM Scheduled_Jobs
@@ -73,30 +74,26 @@ module MSSQL =
                 "
 
                 let parameters = {|
-                    now =
-                        if now.IsSome then
-                            box now.Value
-                        else
-                            null
+                    now = DateTime.Now
                 |}
                 connection.Query<Job.Job>(sql, parameters)
                 |> Seq.toList
 
             member this.Register toRegister =
                 Job.create toRegister None
-                |> insertJob (Connection connection)
+                |> insertJob None
 
             member this.RegisterSafe toRegister transaction =
                 Job.create toRegister None
-                |> insertJob (Transaction transaction)
+                |> insertJob (Some transaction)
 
             member this.Schedule toSchedule shouldRunAfter =
                 Job.create toSchedule (Some shouldRunAfter)
-                |> insertJob (Connection connection)
+                |> insertJob None
 
             member this.ScheduleSafe toSchedule shouldRunAfter transaction =
                 Job.create toSchedule (Some shouldRunAfter)
-                |> insertJob (Transaction transaction)
+                |> insertJob (Some transaction)
             member this.SetDone completedJob =
                 updateStatus completedJob.Id Job.Status.Done
             member this.SetFailed failedJob =
@@ -104,8 +101,12 @@ module MSSQL =
             member this.SetInFlight inFlightJob =
                 updateStatus inFlightJob.Id Job.Status.InFlight
 
-    let create<'t> (connection: SqlConnection) =
-        let datalayer = MSSQL<'t>(connection) :> DataLayer.IDataLayer<'t>
+        interface IDisposable with
+            member this.Dispose() =
+                connection.Close()
+
+    let create<'t> (connectionString: string) =
+        let datalayer = new MSSQL<'t>(connectionString) :> DataLayer.IDataLayer<'t>
         // Setup datalayer
         datalayer.Setup()
         SqlMapper.AddTypeHandler(typeof<Job.Status>, Job.StatusHandler())

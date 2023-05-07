@@ -1,4 +1,8 @@
-### SOME COOL NAME HERE
+<p align="center">
+  <img src="logo.jpg" width="50%" />
+</p>
+
+### Steve
 
 This library was inspired by scheduling systems like [Quartz](https://www.quartz-scheduler.net/) and [Hangfire](https://www.hangfire.io/). As I delved into the intricacies of these systems, I pondered the following questions:
 
@@ -10,16 +14,16 @@ Driven by these considerations, I took on the challenge of implementing a simple
 
 ### Data Storage
 
-**SOME COOL NAME HERE** works with DataLayers, which is an abstraction around a data storage location for saving the background work data. Currently, the library provides the following data layers:
+**Steve** works with DataLayers, which is an abstraction around a data storage location for saving the background work data. Currently, the library provides the following data layers:
 
 - **InMemory**: This data layer is designed for testing purposes and stores the data in memory.
 - **MSSQL**: The MSSQL data layer allows you to store the data in a Microsoft SQL Server database.
 
-It is also possible to create data layers that work with other databases or even different technologies such as MQTT. To create a custom data layer, simply implement the `IDataLayer` interface, and you'll be ready to integrate it with **SOME COOL NAME HERE**.
+It is also possible to create data layers that work with other databases or even different technologies such as MQTT. To create a custom data layer, simply implement the `IDataLayer` interface, and you'll be ready to integrate it with **Steve**.
 
 ### Reducer
 
-In order to run functions without serializing them into the database, **SOME COOL NAME HERE** utilizes a reducer.
+In order to run functions without serializing them into the database, **Steve** utilizes a reducer.
 
 To use the reducer, you need to define a discriminated union that represents your tasks. For example:
 
@@ -62,7 +66,7 @@ The level of indirection provided by the reducer allows for flexibility and seam
 
 ### Full example
 
-```
+```fsharp
 let connection = new SqlConnection "connectionString"
 connection.Open()
 
@@ -109,7 +113,7 @@ Note that for recurring jobs, you'll need to pass the data layer to the evaluato
 
 ### Options
 
-**SOME COOL NAME HERE** provides several options that you can use to customize the behavior of the scheduler:
+**Steve** provides several options that you can use to customize the behavior of the scheduler:
 
 - `with_datalayer`: Specifies the `IDataLayer` implementation to use.
 - `with_polling_interval`: Specifies the interval, in seconds, for polling new jobs. The default value is 0 seconds.

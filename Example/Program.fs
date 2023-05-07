@@ -1,4 +1,5 @@
 ﻿open System
+open System.Threading
 open DataLayer.DataLayer
 open Microsoft.Data.SqlClient
 
@@ -9,18 +10,17 @@ type Message = { Message : string }
 let add x y = x + y
 
 let printMessage message =
-    printfn $"hi %s{message.Message}"
+    printfn $"Message: %s{message.Message}"
 
 type ExampleReducer =
     | Add of int * int
     | Print of Message
     | Recurring of DateTime
 
-let connection = new SqlConnection "Server=localhost,1433;User=sa;Password=<YourStrong!Passw0rd>;Database=arrangement-db;Persist Security Info=False;Encrypt=False"
-connection.Open()
+let connectionString = "Server=localhost,1433;User=sa;Password=<YourStrong!Passw0rd>;Database=arrangement-db;Persist Security Info=False;Encrypt=False"
 
 // let dataLayer = DataLayer.InMemory.create<ExampleReducer>()
-let dataLayer = DataLayer.MSSQL.create<ExampleReducer>(connection)
+let dataLayer = DataLayer.MSSQL.create<ExampleReducer>(connectionString)
 
 let evaluate (datalayer: IDataLayer<ExampleReducer>) reducer =
     match reducer with
@@ -37,7 +37,7 @@ let evaluate (datalayer: IDataLayer<ExampleReducer>) reducer =
 schedulerBuilder<ExampleReducer> () {
     with_datalayer dataLayer
     with_polling_interval (TimeSpan.FromSeconds 1)
-    with_max_jobs 1
+    //with_max_jobs 100
     with_evaluator (evaluate dataLayer)
 }
 
@@ -53,14 +53,17 @@ for i in 0 .. 10 do
 dataLayer.Register (Print { Message = "We can register whenever we want"  })
 
 // We can schedule jobs to happen X amount of time from now
+dataLayer.Schedule (Print { Message = "Should print in 10 seconds" }) (DateTime.Now.AddSeconds 10)
 dataLayer.Schedule (Print { Message = "Should print in 7 days" }) (DateTime.Now.AddDays 7)
 dataLayer.Schedule (Print { Message = "Should Print in 5 minutes" }) (DateTime.Now.AddMinutes 5)
 
 // We can schedule jobs to happen at regular intervals. Like every hour
 // See the reducer
-let time = DateTime.Today.Add(TimeSpan(21, 10, 0))
+let time = DateTime.Now.AddMinutes 2
 dataLayer.Schedule (Recurring time) time
 
+let connection = new SqlConnection(connectionString)
+connection.Open()
 // We can also schedule within a transaction.
 let t1 = connection.BeginTransaction()
 dataLayer.RegisterSafe (Print { Message = "This will not be added as the transaction is rolledback" }) t1
@@ -69,5 +72,6 @@ t1.Rollback()
 let t2 = connection.BeginTransaction()
 dataLayer.RegisterSafe (Print { Message = "This will be added as the transaction is committed" }) t2
 t2.Commit()
+connection.Close()
 
 Console.ReadKey() |> ignore
