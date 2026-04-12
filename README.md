@@ -67,9 +67,6 @@ The level of indirection provided by the reducer allows for flexibility and seam
 ### Full example
 
 ```fsharp
-let connection = new SqlConnection "connectionString"
-connection.Open()
-
 type MathReducer =
     | Add of int * int
     | Subtract of int * int
@@ -83,7 +80,7 @@ let evaluate =
     | Multiply (a, b) -> printfn $"{a * b}"
     | Divide (a, b) ->  printfn $"{a / b}"
 
-let dataLayer = DataLayer.MSSQL.create<MathReducer>(connection)
+let dataLayer = DataLayer.MSSQL.create<MathReducer>("connectionString")
 
 schedulerBuilder<MathReducer> () {
     with_datalayer dataLayer
@@ -93,9 +90,9 @@ schedulerBuilder<MathReducer> () {
 }
 
 // Schedule a job now
-dataLayer.Register (Add (10, 10))
+(dataLayer.Register (Add (10, 10))).Wait()
 // Schedule a job in 5 minutes
-dataLayer.Schedule (Multiply (10, 10)) (DateTime.Now.AddMinutes 5)
+(dataLayer.Schedule (Multiply (10, 10)) (DateTime.UtcNow.AddMinutes 5)).Wait()
 ```
 
 ### Recurring Jobs
@@ -105,8 +102,8 @@ To schedule recurring jobs, you can add a new job in the reducer representing th
 ```fsharp
 | Recurring ran ->
     let in1Hour = ran.AddHours 1
-    datalayer.Schedule (Recurring in1Hour) in1Hour
-    printfn $"It is now: {DateTime.Now}"
+    (datalayer.Schedule (Recurring in1Hour) in1Hour).Wait()
+    printfn $"It is now: {DateTime.UtcNow}"
 ```
 
 Note that for recurring jobs, you'll need to pass the data layer to the evaluator function.

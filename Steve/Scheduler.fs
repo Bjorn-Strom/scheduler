@@ -1,4 +1,4 @@
-﻿namespace Scheduler
+namespace Scheduler
 
 open System
 open System.Threading.Tasks
@@ -13,10 +13,10 @@ module JobQueue =
         |> List.sortBy (fun x -> x.OnlyRunAfter)
 
     let dequeue queue =
-        if List.isEmpty (List.tail queue) then
-            List.tryHead queue, []
-        else
-            List.tryHead queue, List.tail queue
+        match queue with
+        | [] -> None, []
+        | [x] -> Some x, []
+        | x :: rest -> Some x, rest
 
 [<RequireQualifiedAccess>]
 module Scheduler =
@@ -27,8 +27,9 @@ module Scheduler =
         | Completed of Job
         | Failed of Job
         | QueueJobs of Job list
+        | PollFailed of exn
 
-    let internal processJob (inbox: MailboxProcessor<Message>) (job: Job) evaluator =
+    let internal processJob (inbox: MailboxProcessor<Message>) (job: Job) evaluator (onError: exn -> string -> unit) =
         let task = new Task(fun _ ->
             try
                 job.Task
@@ -36,7 +37,9 @@ module Scheduler =
                 |> evaluator
                 Completed job |> inbox.Post
             with
-                | _ -> Failed job |> inbox.Post
+                | ex ->
+                    onError ex $"Job {job.Id}"
+                    Failed job |> inbox.Post
         )
         task.Start()
 
@@ -44,13 +47,15 @@ module Scheduler =
         { DataLayer: IDataLayer<'t>
           PollingInterval: TimeSpan
           MaxJobs: int option
-          Evaluator: ('t -> unit) option }
+          Evaluator: ('t -> unit) option
+          OnError: (exn -> string -> unit) option }
 
     let empty<'t> (): SchedulerSpec<'t> =
         { DataLayer = empty()
           PollingInterval = TimeSpan.FromSeconds 0
           MaxJobs = None
-          Evaluator = None }
+          Evaluator = None
+          OnError = None }
 
     type SchedulerBuilder<'t>() =
         member _.Yield _: SchedulerSpec<'t> = empty<'t>()
@@ -63,16 +68,38 @@ module Scheduler =
                 match config.Evaluator with
                 | Some evaluator -> evaluator
                 | None -> failwith "Evaluator must be supplied to schedulerBuilder"
+            let onError =
+                match config.OnError with
+                | Some handler -> handler
+                | None -> fun ex ctx -> eprintfn "[Steve] %s: %A" ctx ex
 
             let rec poll (inbox: MailboxProcessor<Message>) (pollingInterval: TimeSpan) =
                 async {
-                    do! Async.Sleep(pollingInterval)
-                    let polledJobs = config.DataLayer.Poll ()
-                    inbox.Post(QueueJobs polledJobs)
-                    polling <- false
+                    do! Async.Sleep pollingInterval
+                    try
+                        let! polledJobs = config.DataLayer.Poll () |> Async.AwaitTask
+                        inbox.Post(QueueJobs polledJobs)
+                    with ex ->
+                        inbox.Post(PollFailed ex)
                 }
 
             MailboxProcessor.Start(fun inbox ->
+                let rec dequeue () = async {
+                    if ((config.MaxJobs.IsSome && inFlight < config.MaxJobs.Value) || config.MaxJobs.IsNone) && not (List.isEmpty queue) then
+                        let job, newQueue = JobQueue.dequeue queue
+                        queue <- newQueue
+                        match job with
+                        | Some j ->
+                            try
+                                do! config.DataLayer.SetInFlight j |> Async.AwaitTask
+                                inFlight <- inFlight + 1
+                                processJob inbox j evaluator onError
+                            with ex ->
+                                onError ex $"SetInFlight for job {j.Id}"
+                            do! dequeue ()
+                        | None -> ()
+                }
+
                 let rec loop () =
                     async {
                         if not polling then
@@ -82,26 +109,25 @@ module Scheduler =
                         let! message = inbox.Receive()
                         match message with
                         | Completed job ->
-                            config.DataLayer.SetDone job
+                            try
+                                do! config.DataLayer.SetDone job |> Async.AwaitTask
+                            with ex ->
+                                onError ex $"SetDone for job {job.Id}"
                             inFlight <- inFlight - 1
                         | Failed job ->
-                            config.DataLayer.SetFailed job
+                            try
+                                do! config.DataLayer.SetFailed job |> Async.AwaitTask
+                            with ex ->
+                                onError ex $"SetFailed for job {job.Id}"
                             inFlight <- inFlight - 1
                         | QueueJobs jobs ->
                             queue <- JobQueue.enqueue jobs queue
+                            polling <- false
+                        | PollFailed ex ->
+                            onError ex "Poll"
+                            polling <- false
 
-                        let rec dequeue () =
-                            // Only dequeue if there is room for another job and we have something in the queue
-                            if ((config.MaxJobs.IsSome && inFlight < config.MaxJobs.Value) || config.MaxJobs.IsNone) && (List.length queue) > 0 then
-                                let job, newQueue = JobQueue.dequeue queue
-                                queue <- newQueue
-                                if job.IsSome then
-                                    config.DataLayer.SetInFlight(job.Value)
-                                    inFlight <- inFlight + 1
-                                    processJob inbox job.Value evaluator
-                                    dequeue ()
-
-                        dequeue ()
+                        do! dequeue ()
                         return! loop ()
                     }
                 loop ()
@@ -142,6 +168,16 @@ module Scheduler =
         [<CustomOperation("with_evaluator")>]
         member x.Evaluator (config: SchedulerSpec<'t>, evaluator: 't -> unit) =
             { config with Evaluator = Some evaluator }
+
+        /// <summary>
+        /// Sets an error handler for the scheduler. Called when job execution,
+        /// polling, or status updates fail. Receives the exception and a context string.
+        /// Default: prints to stderr.
+        /// </summary>
+        /// <param name="handler">Error handler receiving (exception, context).</param>
+        [<CustomOperation("with_on_error")>]
+        member x.OnError (config: SchedulerSpec<'t>, handler: exn -> string -> unit) =
+            { config with OnError = Some handler }
 
 [<AutoOpen>]
 module SchedulerBuilder =

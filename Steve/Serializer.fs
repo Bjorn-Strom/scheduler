@@ -1,8 +1,14 @@
 module Evaluator
-    open Newtonsoft.Json
+    open System.Text.Json
+    open System.Text.Json.Serialization
+
+    let private options =
+        let opts = JsonSerializerOptions()
+        opts.Converters.Add(JsonFSharpConverter())
+        opts
 
     let serialize (obj: 't) =
-        JsonConvert.SerializeObject obj
+        JsonSerializer.Serialize(obj, options)
 
-    let deserialize<'t> str =
-        JsonConvert.DeserializeObject<'t> str
+    let deserialize<'t> (str: string) =
+        JsonSerializer.Deserialize<'t>(str, options)

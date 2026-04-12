@@ -48,6 +48,6 @@ let create func onlyRunAfter =
         Task = Evaluator.serialize func
         Status = Waiting
         OnlyRunAfter = onlyRunAfter
-        LastUpdated = DateTime.Now
+        LastUpdated = DateTime.UtcNow
     }
 

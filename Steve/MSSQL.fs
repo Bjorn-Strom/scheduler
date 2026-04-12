@@ -2,39 +2,44 @@ namespace DataLayer
 
 open System
 open System.Data
+open System.Threading.Tasks
 open Dapper
 open Microsoft.Data.SqlClient
 
 module MSSQL =
-    type MSSQL<'t>(connectionString: string) =
-        let connection =
-            let connection = new SqlConnection(connectionString)
-            connection.Open()
-            connection
+    let private asTask (t: Task<unit>) : Task = t
 
-        let insertJob (transaction: IDbTransaction option) (job: Job.Job) =
+    type MSSQL<'t>(connectionString: string) =
+        let insertJob (transaction: IDbTransaction option) (job: Job.Job) : Task = task {
             let sql = "
                 INSERT INTO Scheduled_Jobs (Id, Task, Status, OnlyRunAfter, LastUpdated)
                 VALUES (@Id, @Task, @Status, @OnlyRunAfter, @LastUpdated)
             "
+
             let parameters = {|
                 Id = job.Id
                 Task = job.Task
                 Status = job.Status
                 OnlyRunAfter =
-                    if job.OnlyRunAfter.IsSome then
-                        box job.OnlyRunAfter.Value
-                    else
-                        null
-                LastUpdated = DateTime.Now
+                    match job.OnlyRunAfter with
+                    | Some v -> box v
+                    | None -> null
+                LastUpdated = DateTime.UtcNow
             |}
             match transaction with
             | Some transaction ->
-                transaction.Connection.Execute(sql, parameters, transaction) |> ignore
+                let! _ = transaction.Connection.ExecuteAsync(sql, parameters, transaction)
+                ()
             | None ->
-                connection.Execute(sql, parameters) |> ignore
+                use connection = new SqlConnection(connectionString)
+                do! connection.OpenAsync()
+                let! _ = connection.ExecuteAsync(sql, parameters)
+                ()
+        }
 
-        let updateStatus (jobId: Guid) (status: Job.Status) =
+        let updateStatus (jobId: Guid) (status: Job.Status) : Task = task {
+            use connection = new SqlConnection(connectionString)
+            do! connection.OpenAsync()
             let sql = "
                 UPDATE Scheduled_Jobs
                 SET
@@ -45,39 +50,49 @@ module MSSQL =
             let parameters = {|
                 Status = status
                 Id = jobId
-                LastUpdated = DateTime.Now
+                LastUpdated = DateTime.UtcNow
             |}
-            connection.Execute(sql, parameters) |> ignore
+            let! _ = connection.ExecuteAsync(sql, parameters)
+            ()
+        }
 
         interface DataLayer.IDataLayer<'t> with
             member this.Setup () =
-                let sql = "
-                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Scheduled_Jobs')
-                    BEGIN
-                        CREATE TABLE Scheduled_Jobs (
-                            id UNIQUEIDENTIFIER PRIMARY KEY,
-                            task TEXT NOT NULL,
-                            status NVARCHAR(16) NOT NULL,
-                            onlyRunAfter DATETIME,
-                            LastUpdated DATETIME NOT NULL
-                        )
-                    END
-                "
-                connection.Execute(sql) |> ignore
+                asTask <| task {
+                    let sql = "
+                        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Scheduled_Jobs')
+                        BEGIN
+                            CREATE TABLE Scheduled_Jobs (
+                                id UNIQUEIDENTIFIER PRIMARY KEY,
+                                task TEXT NOT NULL,
+                                status NVARCHAR(16) NOT NULL,
+                                onlyRunAfter DATETIME,
+                                LastUpdated DATETIME NOT NULL
+                            )
+                        END
+                    "
+                    use connection = new SqlConnection(connectionString)
+                    do! connection.OpenAsync()
+                    let! _ = connection.ExecuteAsync(sql)
+                    ()
+                }
 
-            member this.Poll () =
+            member this.Poll () = task {
                 let sql = "
                     SELECT *
                     FROM Scheduled_Jobs
-                    WHERE status = 'WAITING'
-                    AND (onlyRunAfter IS NULL OR onlyRunAfter < @now)
+                    WHERE status = 'Waiting'
+                    AND (onlyRunAfter IS NULL OR onlyRunAfter <= @now)
                 "
 
                 let parameters = {|
-                    now = DateTime.Now
+                    now = DateTime.UtcNow
                 |}
-                connection.Query<Job.Job>(sql, parameters)
-                |> Seq.toList
+                use connection = new SqlConnection(connectionString)
+                do! connection.OpenAsync()
+                let! results = connection.QueryAsync<Job.Job>(sql, parameters)
+                return results |> Seq.toList
+            }
 
             member this.Register toRegister =
                 Job.create toRegister None
@@ -94,20 +109,18 @@ module MSSQL =
             member this.ScheduleSafe toSchedule shouldRunAfter transaction =
                 Job.create toSchedule (Some shouldRunAfter)
                 |> insertJob (Some transaction)
+
             member this.SetDone completedJob =
                 updateStatus completedJob.Id Job.Status.Done
+
             member this.SetFailed failedJob =
                 updateStatus failedJob.Id Job.Status.Failed
+
             member this.SetInFlight inFlightJob =
                 updateStatus inFlightJob.Id Job.Status.InFlight
 
-        interface IDisposable with
-            member this.Dispose() =
-                connection.Close()
-
     let create<'t> (connectionString: string) =
         let datalayer = new MSSQL<'t>(connectionString) :> DataLayer.IDataLayer<'t>
-        // Setup datalayer
-        datalayer.Setup()
+        datalayer.Setup().Wait()
         SqlMapper.AddTypeHandler(typeof<Job.Status>, Job.StatusHandler())
         datalayer
