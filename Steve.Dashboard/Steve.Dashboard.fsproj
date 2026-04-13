@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <RootNamespace>Steve.Dashboard</RootNamespace>
+        <PackageId>Steve.Dashboard</PackageId>
+        <Version>0.1.0</Version>
+        <Authors>Bjørn-Ivar</Authors>
+        <Description>Dashboard middleware for the Steve job scheduler</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="dashboard.html" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Compile Include="DashboardApi.fs" />
+        <Compile Include="DashboardExtensions.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Steve\Steve.fsproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    </ItemGroup>
+
+</Project>

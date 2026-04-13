@@ -1,89 +1,50 @@
 open System
 open System.Threading
-open DataLayer.DataLayer
-open Microsoft.Data.SqlClient
+open System.Threading.Tasks
+open Microsoft.AspNetCore.Builder
+open Steve
+open Steve.Dashboard
 
-open Scheduler
+type Message = { Message: string }
 
-type Message = { Message : string }
-
-let add x y = x + y
-
-let printMessage message =
-    printfn $"Message: %s{message.Message}"
-
-type ExampleReducer =
+type ExampleTask =
     | Add of int * int
     | Print of Message
-    | Recurring of DateTime
+    | Fail of string
 
+let dataLayer = InMemory.create<ExampleTask>()
 
-let dataLayer = DataLayer.InMemory.create<ExampleReducer>()
-
-//let connectionString = "Server=localhost,1433;User=sa;Password=<YourStrong!Passw0rd>;Database=arrangement-db;Persist Security Info=False;Encrypt=False"
-//let dataLayer = DataLayer.MSSQL.create<ExampleReducer>(connectionString)
-
-let evaluate (datalayer: IDataLayer<ExampleReducer>) reducer =
-    match reducer with
-    | Add (x, y) ->
-        printfn $"We added %d{x} and %d{y} and got %d{add x y}"
-    | Print m ->
-        printMessage m
-    | Recurring ran ->
-        let in1Hour = ran.AddHours 1
-        (datalayer.Schedule (Recurring in1Hour) in1Hour).Wait()
-        printfn $"It is now: {DateTime.UtcNow}"
-
-schedulerBuilder<ExampleReducer> () {
-    with_datalayer dataLayer
-    with_polling_interval (TimeSpan.FromSeconds 1.)
-    //with_max_jobs 100
-    with_evaluator (evaluate dataLayer)
+let evaluate (t: ExampleTask) (_ct: CancellationToken) : Task = task {
+    match t with
+    | Add (x, y) -> printfn $"Added %d{x} + %d{y} = %d{x + y}"
+    | Print m -> printfn $"Message: %s{m.Message}"
+    | Fail msg -> failwith msg
 }
 
-// We can register a bunch of jobs to be done immediately
-for i in 0 .. 10 do
-    let add = Add(0, i)
-    if i > 0 && i % 2 = 0 then
-        let print = Print { Message = $"Number is: {i}" }
-        (dataLayer.Register print).Wait()
-    (dataLayer.Register add).Wait()
+// Start the scheduler
+let handle =
+    schedulerBuilder<ExampleTask> () {
+        with_datalayer dataLayer
+        with_polling_interval (TimeSpan.FromSeconds 1.)
+        with_max_jobs 4
+        with_evaluator evaluate
+        with_max_retries 2
+    }
 
-// We can also register jobs outside of a loop
-(dataLayer.Register (Print { Message = "We can register whenever we want" })).Wait()
+// Register some test jobs
+for i in 1..5 do
+    dataLayer.Register(Add(i, i * 10)).Wait()
 
-// We can schedule jobs to happen X amount of time from now
-(dataLayer.Schedule (Print { Message = "Should print in 10 seconds" }) (DateTime.UtcNow.AddSeconds 10)).Wait()
-(dataLayer.Schedule (Print { Message = "Should print in 7 days" }) (DateTime.UtcNow.AddDays 7)).Wait()
-(dataLayer.Schedule (Print { Message = "Should Print in 5 minutes" }) (DateTime.UtcNow.AddMinutes 5)).Wait()
+dataLayer.Register(Print { Message = "Hello from Steve!" }).Wait()
+dataLayer.Register(Fail "This job will fail").Wait()
+dataLayer.Schedule (Print { Message = "Delayed 30s" }) (DateTime.UtcNow.AddSeconds 30.) |> fun t -> t.Wait()
 
-let currentJobs = (dataLayer.Poll()).Result
-printfn $"\n--- Queued jobs: {currentJobs.Length} ---"
-for job in currentJobs do
-    let scheduledFor =
-        match job.OnlyRunAfter with
-        | Some t -> $"scheduled for {t}"
-        | None -> "run ASAP"
-    printfn $"  [{job.Status}] {job.Task} ({scheduledFor})"
-printfn $"---\n"
+// Start web host with dashboard
+let builder = WebApplication.CreateBuilder()
+let app = builder.Build()
 
-// We can schedule jobs to happen at regular intervals. Like every hour
-// See the reducer
-let time = DateTime.UtcNow.AddMinutes 2
-(dataLayer.Schedule (Recurring time) time).Wait()
+app.MapSteveDashboard(dataLayer :?> Steve.DataLayer.IDashboardDataLayer, "/steve") |> ignore
+app.MapGet("/", Func<string>(fun () -> "Steve dashboard at /steve")) |> ignore
 
-(*let connection = new SqlConnection(connectionString)
-connection.Open()
-
-// We can also schedule within a transaction.
-let t1 = connection.BeginTransaction()
-(dataLayer.RegisterSafe (Print { Message = "This will not be added as the transaction is rolledback" }) t1).Wait()
-t1.Rollback()
-
-let t2 = connection.BeginTransaction()
-(dataLayer.RegisterSafe (Print { Message = "This will be added as the transaction is committed" }) t2).Wait()
-t2.Commit()
-connection.Close()
-*)
-
-Console.ReadKey() |> ignore
+printfn "Dashboard: http://localhost:5000/steve"
+app.Run("http://localhost:5000")

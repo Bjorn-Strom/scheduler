@@ -5,8 +5,9 @@ open System.Threading
 open System.Threading.Tasks
 open Xunit
 open Testcontainers.MsSql
-open DataLayer
-open Scheduler
+open Steve
+open Steve.Job
+open Steve.DataLayer
 
 type TestTask =
     | Add of int * int
@@ -179,16 +180,16 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         let mutable result = 0
         let evaluated = new ManualResetEventSlim(false)
 
-        let evaluator =
-            function
+        let evaluator (t: TestTask) (_ct: CancellationToken) : Task = task {
+            match t with
             | Add(a, b) ->
-                // Only signal on our specific job
                 if a = 555 && b = 444 then
                     result <- a + b
                     evaluated.Set()
             | _ -> ()
+        }
 
-        schedulerBuilder<TestTask> () {
+        let handle = schedulerBuilder<TestTask> () {
             with_datalayer dl
             with_polling_interval (TimeSpan.FromMilliseconds 100.0)
             with_max_jobs 10
@@ -200,6 +201,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         let completed = evaluated.Wait(TimeSpan.FromSeconds 15.0)
         Assert.True(completed, "Job should be processed by scheduler")
         Assert.Equal(999, result)
+        handle.Stop().Wait()
 
     [<Fact>]
     member _.``ScheduleSafe future committed not returned by Poll`` () =
@@ -225,18 +227,111 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         Assert.False(found)
 
     [<Fact>]
-    member _.``SetDone only affects target job`` () =
+    member _.``Poll atomically claims jobs as InFlight`` () =
         let dl = createDl ()
         dl.Register(Add(80, 1)).Wait()
         dl.Register(Add(80, 2)).Wait()
         let jobs = dl.Poll().Result
-        let target = jobs |> List.find (fun j ->
-            Evaluator.deserialize<TestTask> j.Task = Add(80, 1))
-        let other = jobs |> List.find (fun j ->
-            Evaluator.deserialize<TestTask> j.Task = Add(80, 2))
-        dl.SetDone(target).Wait()
+        let claimed = jobs |> List.filter (fun j ->
+            let t = Evaluator.deserialize<TestTask> j.Task
+            match t with Add(80, _) -> true | _ -> false)
+        Assert.True(List.length claimed >= 2)
+        // All claimed jobs should be InFlight
+        for j in claimed do
+            Assert.Equal(Job.InFlight, j.Status)
+        // Second poll should not return them again
         let after = dl.Poll().Result
-        let targetGone = after |> List.exists (fun j -> j.Id = target.Id) |> not
-        let otherStill = after |> List.exists (fun j -> j.Id = other.Id)
-        Assert.True(targetGone, "Done job should be gone")
-        Assert.True(otherStill, "Other job should remain")
+        let reclaimed = after |> List.exists (fun j ->
+            claimed |> List.exists (fun c -> c.Id = j.Id))
+        Assert.False(reclaimed, "Already claimed jobs should not reappear in Poll")
+
+// ─── Dashboard data layer (MSSQL) ───
+
+type MSSQLDashboardTests(fixture: MSSQLFixture) =
+    let createDl () = MSSQL.create<TestTask>(fixture.ConnectionString)
+    let dash (dl: IDataLayer<TestTask>) = dl :?> IDashboardDataLayer
+
+    interface IClassFixture<MSSQLFixture>
+
+    [<Fact>]
+    member _.``QueryJobs returns all jobs`` () =
+        let dl = createDl ()
+        dl.Register(Add(200, 1)).Wait()
+        dl.Register(Add(200, 2)).Wait()
+        // Poll to move to InFlight so we can SetDone
+        dl.Poll().Result |> ignore
+        let jobs, total = (dash dl).QueryJobs({ Status = None; Page = 1; PageSize = 100 }).Result
+        Assert.True(total >= 2)
+        Assert.True(jobs.Length >= 2)
+
+    [<Fact>]
+    member _.``QueryJobs filters by status`` () =
+        let dl = createDl ()
+        dl.Register(Add(201, 1)).Wait()
+        let polled = dl.Poll().Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(201, 1))
+        dl.SetDone(target).Wait()
+        let jobs, _ = (dash dl).QueryJobs({ Status = Some Job.Done; Page = 1; PageSize = 100 }).Result
+        let found = jobs |> List.exists (fun j -> j.Id = target.Id)
+        Assert.True(found, "Should find done job when filtering by Done status")
+
+    [<Fact>]
+    member _.``GetJob returns existing job`` () =
+        let dl = createDl ()
+        dl.Register(Add(202, 1)).Wait()
+        let polled = dl.Poll().Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(202, 1))
+        let found = (dash dl).GetJob(target.Id).Result
+        Assert.True(found.IsSome)
+        Assert.Equal(target.Id, found.Value.Id)
+
+    [<Fact>]
+    member _.``GetJob returns None for missing`` () =
+        let dl = createDl ()
+        let found = (dash dl).GetJob(Guid.NewGuid()).Result
+        Assert.True(found.IsNone)
+
+    [<Fact>]
+    member _.``RetryJob resets failed job`` () =
+        let dl = createDl ()
+        dl.Register(Add(203, 1)).Wait()
+        let polled = dl.Poll().Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(203, 1))
+        dl.SetFailed(target).Wait()
+        let result = (dash dl).RetryJob(target.Id).Result
+        Assert.True(result)
+        let job = (dash dl).GetJob(target.Id).Result
+        Assert.Equal(Job.Waiting, job.Value.Status)
+
+    [<Fact>]
+    member _.``RetryJob returns false for non-failed`` () =
+        let dl = createDl ()
+        dl.Register(Add(204, 1)).Wait()
+        let polled = dl.Poll().Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(204, 1))
+        let result = (dash dl).RetryJob(target.Id).Result
+        Assert.False(result)
+
+    [<Fact>]
+    member _.``DeleteJob removes job`` () =
+        let dl = createDl ()
+        dl.Register(Add(205, 1)).Wait()
+        let polled = dl.Poll().Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(205, 1))
+        let result = (dash dl).DeleteJob(target.Id).Result
+        Assert.True(result)
+        let found = (dash dl).GetJob(target.Id).Result
+        Assert.True(found.IsNone)
+
+    [<Fact>]
+    member _.``GetStats returns counts`` () =
+        let dl = createDl ()
+        let d = dash dl
+        dl.Register(Add(206, 1)).Wait()
+        dl.Register(Add(206, 2)).Wait()
+        let polled = dl.Poll().Result
+        let t1 = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(206, 1))
+        dl.SetDone(t1).Wait()
+        let stats = d.GetStats().Result
+        Assert.True(stats.DoneCount >= 1)
+        Assert.True(stats.InFlightCount >= 1)

@@ -1,24 +1,33 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>netstandard2.0</TargetFramework>
+        <TargetFramework>net8.0</TargetFramework>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <RootNamespace>Scheduler</RootNamespace>
+        <RootNamespace>Steve</RootNamespace>
+        <PackageId>Steve</PackageId>
+        <Version>0.1.0</Version>
+        <Authors>Bjørn-Ivar</Authors>
+        <Description>A simple database-driven job scheduler for F#</Description>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <RepositoryType>git</RepositoryType>
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Include="Serializer.fs" />
+        <Compile Include="Evaluator.fs" />
         <Compile Include="Job.fs" />
         <Compile Include="DataLayer.fs" />
         <Compile Include="InMemory.fs" />
         <Compile Include="MSSQL.fs" />
         <Compile Include="Scheduler.fs" />
+        <Compile Include="HostedService.fs" />
     </ItemGroup>
 
     <ItemGroup>
       <PackageReference Include="Dapper" Version="2.1.72" />
       <PackageReference Include="FSharp.SystemTextJson" Version="1.4.36" />
       <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
+      <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
     </ItemGroup>
 
 </Project>

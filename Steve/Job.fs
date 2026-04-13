@@ -1,53 +1,67 @@
-module Job
+namespace Steve
 
-open System
-open Dapper
+module Job =
 
-type Status =
-    | Done
-    | Waiting
-    | InFlight
-    | Failed
+    open System
+    open Dapper
 
-    static member Serialize(status: Status) = status.ToString()
+    type Status =
+        | Done
+        | Waiting
+        | InFlight
+        | Failed
 
-    static member Deserialize(s: string) =
-        match s with
-        | nameof Done -> Ok Done
-        | nameof Waiting -> Ok Waiting
-        | nameof InFlight -> Ok InFlight
-        | nameof Failed -> Ok Failed
-        | _ -> Error $"Invalid status: '{s}'"
+        static member Serialize(status: Status) = status.ToString()
 
-type StatusHandler() =
-    inherit SqlMapper.TypeHandler<Status>()
+        static member Deserialize(s: string) =
+            match s with
+            | nameof Done -> Ok Done
+            | nameof Waiting -> Ok Waiting
+            | nameof InFlight -> Ok InFlight
+            | nameof Failed -> Ok Failed
+            | _ -> Error $"Invalid status: '{s}'"
 
-    override _.Parse(value) =
-        match Status.Deserialize(string value) with
-        | Ok status -> status
-        | Error e -> failwith e
+    type StatusHandler() =
+        inherit SqlMapper.TypeHandler<Status>()
 
-    override _.SetValue(p, value) =
-        p.DbType <- Data.DbType.String
-        p.Size <- 16
-        p.Value <- Status.Serialize value
+        override _.Parse(value) =
+            match Status.Deserialize(string value) with
+            | Ok status -> status
+            | Error e -> failwith e
 
-[<CLIMutable>]
-type Job =
-    {
-        Id: Guid
-        Task: string
-        Status: Status
-        OnlyRunAfter: DateTime option
-        LastUpdated: DateTime
-    }
+        override _.SetValue(p, value) =
+            p.DbType <- Data.DbType.String
+            p.Size <- 16
+            p.Value <- Status.Serialize value
 
-let create func onlyRunAfter =
-    {
-        Id = Guid.NewGuid()
-        Task = Evaluator.serialize func
-        Status = Waiting
-        OnlyRunAfter = onlyRunAfter
-        LastUpdated = DateTime.UtcNow
-    }
+    [<CLIMutable>]
+    type JobRecord =
+        {
+            Id: Guid
+            Task: string
+            Status: Status
+            OnlyRunAfter: DateTime option
+            LastUpdated: DateTime
+            RetryCount: int
+            StartedAt: DateTime option
+            CompletedAt: DateTime option
+            ErrorMessage: string option
+            DedupKey: string option
+        }
 
+    let create func onlyRunAfter =
+        {
+            Id = Guid.NewGuid()
+            Task = Evaluator.serialize func
+            Status = Waiting
+            OnlyRunAfter = onlyRunAfter
+            LastUpdated = DateTime.UtcNow
+            RetryCount = 0
+            StartedAt = None
+            CompletedAt = None
+            ErrorMessage = None
+            DedupKey = None
+        }
+
+    let createWithDedup func onlyRunAfter dedupKey =
+        { create func onlyRunAfter with DedupKey = Some dedupKey }

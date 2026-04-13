@@ -1,4 +1,6 @@
-module Evaluator
+namespace Steve
+
+module Evaluator =
     open System.Text.Json
     open System.Text.Json.Serialization
 
