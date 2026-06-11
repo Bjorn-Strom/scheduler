@@ -18,7 +18,19 @@ module InMemory =
 
     type InMemory<'t>() =
         let mutable store: Job.JobRecord list = []
+        let mutable recurring: Recurring.RecurringRecord list = []
         let lockObj = obj()
+
+        // Mirrors the MSSQL filtered unique index: a dedup key may only be
+        // held by one Waiting or InFlight job at a time. Call under lock.
+        let hasActiveDuplicate (job: Job.JobRecord) =
+            match job.DedupKey with
+            | None -> false
+            | Some key ->
+                store |> List.exists (fun j ->
+                    j.Id <> job.Id
+                    && j.DedupKey = Some key
+                    && (j.Status = Job.Waiting || j.Status = Job.InFlight))
         interface IDataLayer<'t> with
             member this.Setup () = Task.CompletedTask
             member this.Register foo =
@@ -29,17 +41,22 @@ module InMemory =
                 let newJob = Job.create foo (Some shouldRunAfter)
                 lock lockObj (fun () -> store <- store @ [newJob])
                 Task.CompletedTask
-            member this.Poll () =
+            member this.Poll maxCount =
                 let now = DateTime.UtcNow
+                let claim (job: Job.JobRecord) = { job with Status = Job.InFlight; LastUpdated = now; StartedAt = Some now }
                 let result = lock lockObj (fun () ->
-                    let ready = store |> List.filter (canRunNow now)
+                    let claimed =
+                        store
+                        |> List.filter (canRunNow now)
+                        |> List.truncate (max 0 maxCount)
+                        |> List.map claim
                     store <-
                         store
                         |> List.map (fun j ->
-                            if ready |> List.exists (fun r -> r.Id = j.Id) then
-                                { j with Status = Job.InFlight; LastUpdated = now; StartedAt = Some now }
-                            else j)
-                    ready |> List.map (fun j -> { j with Status = Job.InFlight; LastUpdated = now; StartedAt = Some now }))
+                            claimed
+                            |> List.tryFind (fun c -> c.Id = j.Id)
+                            |> Option.defaultValue j)
+                    claimed)
                 Task.FromResult(result)
             member this.SetDone job =
                 lock lockObj (fun () ->
@@ -50,13 +67,13 @@ module InMemory =
                                 { j with Status = Job.Done; LastUpdated = DateTime.UtcNow; CompletedAt = job.CompletedAt }
                             else j))
                 Task.CompletedTask
-            member this.SetInFlight job =
+            member this.Release job =
                 lock lockObj (fun () ->
                     store <-
                         store
                         |> List.map (fun j ->
-                            if j.Id = job.Id then
-                                { j with Status = Job.InFlight; LastUpdated = DateTime.UtcNow }
+                            if j.Id = job.Id && j.Status = Job.InFlight then
+                                { j with Status = Job.Waiting; StartedAt = None; LastUpdated = DateTime.UtcNow }
                             else j))
                 Task.CompletedTask
             member this.SetFailed job =
@@ -106,6 +123,42 @@ module InMemory =
                         store <- store @ [newJob]
                         true)
                 Task.FromResult(result)
+            member this.UpsertRecurring job =
+                let now = DateTime.UtcNow
+                lock lockObj (fun () ->
+                    let serializedSchedule = Schedule.serialize job.Schedule
+                    let updated =
+                        match recurring |> List.tryFind (fun r -> r.Name = job.Name) with
+                        | Some existing when existing.Schedule = serializedSchedule ->
+                            { existing with Task = Evaluator.serialize job.Task }
+                        | _ -> Recurring.createRecord job now
+                    recurring <-
+                        (recurring |> List.filter (fun r -> r.Name <> job.Name)) @ [updated])
+                Task.CompletedTask
+
+            member this.RemoveRecurring name =
+                let result = lock lockObj (fun () ->
+                    let before = recurring.Length
+                    recurring <- recurring |> List.filter (fun r -> r.Name <> name)
+                    recurring.Length < before)
+                Task.FromResult(result)
+
+            member this.EnqueueDueRecurring now =
+                let result = lock lockObj (fun () ->
+                    let due = recurring |> List.filter (fun r -> r.NextRun <= now)
+                    let mutable enqueued = 0
+                    for definition in due do
+                        let occurrence = Recurring.occurrenceJob definition now
+                        if not (hasActiveDuplicate occurrence) then
+                            store <- store @ [occurrence]
+                            enqueued <- enqueued + 1
+                        recurring <-
+                            recurring
+                            |> List.map (fun r ->
+                                if r.Name = definition.Name then Recurring.advance r now else r)
+                    enqueued)
+                Task.FromResult(result)
+
             member this.ReclaimStale timeout =
                 let result = lock lockObj (fun () ->
                     let cutoff = DateTime.UtcNow - timeout
@@ -172,6 +225,8 @@ module InMemory =
             member this.RetryJob id =
                 let result = lock lockObj (fun () ->
                     match store |> List.tryFind (fun j -> j.Id = id && j.Status = Job.Failed) with
+                    | None -> NotFound
+                    | Some job when hasActiveDuplicate job -> DuplicateActive
                     | Some _ ->
                         store <-
                             store
@@ -179,13 +234,14 @@ module InMemory =
                                 if j.Id = id then
                                     { j with Status = Job.Waiting; ErrorMessage = None; OnlyRunAfter = None; LastUpdated = DateTime.UtcNow }
                                 else j)
-                        true
-                    | None -> false)
+                        Succeeded)
                 Task.FromResult(result)
 
             member this.RequeueJob id =
                 let result = lock lockObj (fun () ->
                     match store |> List.tryFind (fun j -> j.Id = id) with
+                    | None -> NotFound
+                    | Some job when hasActiveDuplicate job -> DuplicateActive
                     | Some _ ->
                         store <-
                             store
@@ -193,8 +249,7 @@ module InMemory =
                                 if j.Id = id then
                                     { j with Status = Job.Waiting; ErrorMessage = None; OnlyRunAfter = None; StartedAt = None; CompletedAt = None; RetryCount = 0; LastUpdated = DateTime.UtcNow }
                                 else j)
-                        true
-                    | None -> false)
+                        Succeeded)
                 Task.FromResult(result)
 
             member this.DeleteJob id =

@@ -5,7 +5,7 @@
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <RootNamespace>Steve</RootNamespace>
         <PackageId>Steve</PackageId>
-        <Version>0.1.0</Version>
+        <Version>0.2.0</Version>
         <Authors>Bjørn-Ivar</Authors>
         <Description>A simple database-driven job scheduler for F#</Description>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -14,7 +14,9 @@
 
     <ItemGroup>
         <Compile Include="Evaluator.fs" />
+        <Compile Include="Schedule.fs" />
         <Compile Include="Job.fs" />
+        <Compile Include="Recurring.fs" />
         <Compile Include="DataLayer.fs" />
         <Compile Include="InMemory.fs" />
         <Compile Include="MSSQL.fs" />
@@ -23,6 +25,7 @@
     </ItemGroup>
 
     <ItemGroup>
+      <PackageReference Include="Cronos" Version="0.13.0" />
       <PackageReference Include="Dapper" Version="2.1.72" />
       <PackageReference Include="FSharp.SystemTextJson" Version="1.4.36" />
       <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />

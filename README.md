@@ -9,7 +9,7 @@ A simple database-driven job scheduler for F#.
 Inspired by [Quartz](https://www.quartz-scheduler.net/) and [Hangfire](https://www.hangfire.io/), Steve focuses on:
 
 - **Crash safety** — jobs live in the database, not in memory. If your process dies, pending work survives.
-- **Exactly-once execution** — jobs are atomically claimed when polled, preventing double-processing.
+- **At-least-once execution** — jobs are atomically claimed when polled, so workers never race for the same job. The rare re-run (a crashed worker's job being reclaimed, or a slow worker outliving the stale timeout) means evaluators should be idempotent.
 - **Backward compatibility** — tasks are serialized as discriminated unions. You can evolve your task types without breaking in-flight jobs.
 
 ### Data Layers
@@ -17,9 +17,16 @@ Inspired by [Quartz](https://www.quartz-scheduler.net/) and [Hangfire](https://w
 Steve works with `IDataLayer<'t>`, an abstraction over your job storage. Built-in implementations:
 
 - **InMemory** — for testing.
-- **MSSQL** — Microsoft SQL Server with automatic table creation, atomic poll-and-claim, and transient error retry (3 attempts with exponential backoff).
+- **MSSQL** — Microsoft SQL Server with automatic table creation, atomic poll-and-claim, and retry of transient errors (timeouts, deadlocks, throttling — 3 attempts with exponential backoff).
 
 Custom data layers: implement `IDataLayer<'t>` to integrate any database or messaging system.
+
+> **One table per task type.** The MSSQL data layer defaults to a table named `Scheduled_Jobs`. Two schedulers with different task types polling the same table will claim each other's jobs and fail to deserialize them. If you run multiple task types against one database, give each its own table:
+>
+> ```fsharp
+> let instance = MSSQL.MSSQL<SendEmail>(connectionString, tableName = "Email_Jobs")
+> (instance :> IDataLayer<SendEmail>).Setup().Wait()
+> ```
 
 ### Evaluator Pattern
 
@@ -117,30 +124,46 @@ Once the job completes or fails, the same key can be reused. `ScheduleWithDedup`
 
 ### Recurring Jobs
 
-Schedule recurring work by re-registering from within the evaluator:
+Register a recurring definition once (e.g. at startup); the scheduler enqueues an occurrence as a normal job whenever it's due:
 
 ```fsharp
-| Recurring ran ->
-    let next = ran.AddHours 1.0
-    do! datalayer.Schedule (Recurring next) next
-    printfn $"It is now: {DateTime.UtcNow}"
+do! dataLayer.UpsertRecurring
+        { Name = "cleanup"
+          Task = CleanupExpiredSessions
+          Schedule = Every (TimeSpan.FromHours 1.0) }
+
+do! dataLayer.UpsertRecurring
+        { Name = "nightly-report"
+          Task = SendReport
+          Schedule = Cron "0 3 * * *" }  // standard 5-field cron, evaluated in UTC
 ```
+
+The definition is the durable thing, so a failed (or even permanently failed) occurrence never stops the next one from firing. Semantics:
+
+- **Upsert by name.** Re-upserting the same name and schedule keeps the next run time (safe to call on every startup); changing the schedule recomputes it.
+- **No overlapping runs.** Occurrences carry the dedup key `recurring:<name>` — if the previous occurrence is still Waiting or InFlight, the new one is skipped and the schedule simply moves on.
+- **No catch-up floods.** If the scheduler was down across several due times, the definition fires once and continues from now.
+- **`RemoveRecurring "cleanup"`** deletes the definition; already-enqueued occurrences are unaffected.
+
+`Every` intervals are measured from each enqueue, so they drift slightly; use `Cron` for wall-clock precision. Occurrences retry like any other job per `with_max_retries`.
 
 ### Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `with_datalayer` | `IDataLayer<'t>` implementation | Required |
-| `with_evaluator` | `'t -> CancellationToken -> Task` function that processes jobs | Required |
-| `with_polling_interval` | How often to poll for new jobs | 5 seconds |
-| `with_max_jobs` | Max concurrent jobs | Unlimited |
-| `with_max_retries` | Times to retry a failed job (exponential backoff) | 0 (no retries) |
-| `with_stale_timeout` | Reclaim InFlight jobs older than this duration | Disabled |
-| `with_logger` | `ILogger` for structured logging | No logging |
+| Option                  | Description                                                                      | Default        |
+| ----------------------- | -------------------------------------------------------------------------------- | -------------- |
+| `with_datalayer`        | `IDataLayer<'t>` implementation                                                  | Required       |
+| `with_evaluator`        | `'t -> CancellationToken -> Task` function that processes jobs                   | Required       |
+| `with_polling_interval` | How often to poll for new jobs (the first poll runs immediately)                 | 5 seconds      |
+| `with_max_jobs`         | Max concurrent jobs — each poll only claims as many jobs as there are free slots | Unlimited      |
+| `with_max_retries`      | Times to retry a failed job (exponential backoff)                                | 0 (no retries) |
+| `with_stale_timeout`    | Reclaim InFlight jobs older than this duration                                   | Disabled       |
+| `with_logger`           | `ILogger` for structured logging                                                 | No logging     |
 
 ### Graceful Shutdown
 
 `schedulerBuilder` returns a `SchedulerHandle` with a `Stop()` method. Calling `Stop()` cancels the `CancellationToken` passed to evaluators and returns a `Task` that completes once all in-flight jobs finish. No new jobs are started after shutdown is requested.
+
+Jobs that observe the cancellation (throw `OperationCanceledException`) are released back to `Waiting` and will be re-processed after the next start — they are not marked `Done`. Jobs that were claimed but never started are also released.
 
 `SchedulerHandle` also implements `IAsyncDisposable`.
 
@@ -170,6 +193,8 @@ schedulerBuilder<MyTask> () {
 
 Jobs InFlight longer than the timeout are reset to `Waiting` and re-processed on the next poll.
 
+Pick a timeout comfortably longer than your slowest job. If a worker is merely slow — not dead — and the timeout fires, the job runs twice: once on the slow worker, once wherever it gets reclaimed. This is the at-least-once trade-off; idempotent evaluators make it harmless.
+
 ### IHostedService Integration
 
 Register Steve as a hosted service in ASP.NET Core / Generic Host:
@@ -179,7 +204,7 @@ open Steve
 
 services.AddSteve<MyTask>(fun spec ->
     { spec with
-        DataLayer = myDataLayer
+        DataLayer = Some myDataLayer
         PollingInterval = TimeSpan.FromSeconds 5
         Evaluator = Some evaluate })
 ```
@@ -195,12 +220,15 @@ app.MapSteveDashboard(dataLayer :?> IDashboardDataLayer, "/steve") |> ignore
 ```
 
 Features:
+
 - **Stats overview** — waiting, in-flight, done, failed counts, average duration, throughput
 - **Job table** — sortable columns, status filtering, pagination
 - **Error visibility** — click to expand full error messages and task payloads
 - **Actions** — retry failed jobs, requeue any job, delete individual jobs, bulk purge old completed jobs
 
 The dashboard reads from `IDashboardDataLayer`, which both built-in data layers (InMemory and MSSQL) implement. No extra configuration needed.
+
+> **The dashboard has no authentication.** Anyone who can reach the URL can retry, requeue, delete and purge jobs. Put it behind your own auth middleware (e.g. `RequireAuthorization` on the route group, or mount it only on an internal-facing host).
 
 ### Logging
 

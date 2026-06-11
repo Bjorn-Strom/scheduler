@@ -5,7 +5,7 @@
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <RootNamespace>Steve.Dashboard</RootNamespace>
         <PackageId>Steve.Dashboard</PackageId>
-        <Version>0.1.0</Version>
+        <Version>0.2.0</Version>
         <Authors>Bjørn-Ivar</Authors>
         <Description>Dashboard middleware for the Steve job scheduler</Description>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>

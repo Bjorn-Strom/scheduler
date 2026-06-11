@@ -39,6 +39,12 @@ dataLayer.Register(Print { Message = "Hello from Steve!" }).Wait()
 dataLayer.Register(Fail "This job will fail").Wait()
 dataLayer.Schedule (Print { Message = "Delayed 30s" }) (DateTime.UtcNow.AddSeconds 30.) |> fun t -> t.Wait()
 
+// Recurring job — fires every 15 seconds for as long as the definition exists
+dataLayer.UpsertRecurring(
+    { Name = "heartbeat"
+      Task = Print { Message = "Recurring heartbeat" }
+      Schedule = Every (TimeSpan.FromSeconds 15.) }).Wait()
+
 // Start web host with dashboard
 let builder = WebApplication.CreateBuilder()
 let app = builder.Build()

@@ -29,6 +29,7 @@ module Scheduler =
     type internal Message =
         | Completed of JobRecord
         | Failed of JobRecord * string option
+        | Cancelled of JobRecord
         | QueueJobs of JobRecord list
         | PollFailed of exn
         | Shutdown of TaskCompletionSource<unit>
@@ -42,8 +43,8 @@ module Scheduler =
                 Completed job |> inbox.Post
             with
             | :? OperationCanceledException when ct.IsCancellationRequested ->
-                logger.LogInformation("Job {JobId} cancelled during shutdown", job.Id)
-                Completed job |> inbox.Post
+                logger.LogInformation("Job {JobId} cancelled during shutdown, releasing back to Waiting", job.Id)
+                Cancelled job |> inbox.Post
             | ex ->
                 logger.LogError(ex, "Job {JobId} failed", job.Id)
                 Failed (job, Some (ex.ToString())) |> inbox.Post
@@ -60,7 +61,7 @@ module Scheduler =
             member this.DisposeAsync() = ValueTask(this.Stop())
 
     type SchedulerSpec<'t> =
-        { DataLayer: IDataLayer<'t>
+        { DataLayer: IDataLayer<'t> option
           PollingInterval: TimeSpan
           MaxJobs: int option
           MaxRetries: int
@@ -69,7 +70,7 @@ module Scheduler =
           Logger: ILogger option }
 
     let empty<'t> (): SchedulerSpec<'t> =
-        { DataLayer = empty()
+        { DataLayer = None
           PollingInterval = TimeSpan.FromSeconds 5
           MaxJobs = None
           MaxRetries = 0
@@ -85,6 +86,10 @@ module Scheduler =
                 match config.Evaluator with
                 | Some evaluator -> evaluator
                 | None -> failwith "Evaluator must be supplied to schedulerBuilder"
+            let dataLayer =
+                match config.DataLayer with
+                | Some dataLayer -> dataLayer
+                | None -> failwith "DataLayer must be supplied to schedulerBuilder"
             let logger =
                 match config.Logger with
                 | Some l -> l
@@ -99,28 +104,54 @@ module Scheduler =
                     let runAfter = retryBackoff job.RetryCount
                     logger.LogWarning("Job {JobId} failed, scheduling retry {RetryNum}/{MaxRetries} after {RunAfter}", job.Id, job.RetryCount + 1, config.MaxRetries, runAfter)
                     try
-                        do! config.DataLayer.SetRetry job runAfter |> Async.AwaitTask
+                        do! dataLayer.SetRetry job runAfter |> Async.AwaitTask
                     with ex ->
                         logger.LogError(ex, "SetRetry failed for job {JobId}", job.Id)
                 else
                     logger.LogError("Job {JobId} failed after {RetryCount} retries, marking as Failed", job.Id, job.RetryCount)
                     try
-                        do! config.DataLayer.SetFailed job |> Async.AwaitTask
+                        do! dataLayer.SetFailed job |> Async.AwaitTask
                     with ex ->
                         logger.LogError(ex, "SetFailed failed for job {JobId}", job.Id)
             }
 
-            let rec poll (inbox: MailboxProcessor<Message>) (pollingInterval: TimeSpan) =
+            let markDone (job: JobRecord) = async {
+                let doneJob = { job with CompletedAt = Some DateTime.UtcNow }
+                try
+                    do! dataLayer.SetDone doneJob |> Async.AwaitTask
+                with ex ->
+                    logger.LogError(ex, "SetDone failed for job {JobId}", job.Id)
+            }
+
+            // Gives a claimed-but-not-finished job back to the pool, e.g. on shutdown.
+            let releaseJob (job: JobRecord) = async {
+                try
+                    do! dataLayer.Release job |> Async.AwaitTask
+                with ex ->
+                    logger.LogError(ex, "Release failed for job {JobId}", job.Id)
+            }
+
+            // How many more jobs we can claim without exceeding MaxJobs,
+            // counting both running jobs and jobs already claimed into the local queue.
+            let availableSlots inFlight (queue: JobRecord list) =
+                match config.MaxJobs with
+                | Some maxJobs -> max 0 (maxJobs - inFlight - queue.Length)
+                | None -> Int32.MaxValue
+
+            let poll (inbox: MailboxProcessor<Message>) (delay: TimeSpan) (claimLimit: int) =
                 async {
-                    do! Async.Sleep pollingInterval
+                    do! Async.Sleep delay
                     try
                         match config.StaleTimeout with
                         | Some timeout ->
-                            let! reclaimed = config.DataLayer.ReclaimStale timeout |> Async.AwaitTask
+                            let! reclaimed = dataLayer.ReclaimStale timeout |> Async.AwaitTask
                             if reclaimed > 0 then
                                 logger.LogWarning("Reclaimed {Count} stale InFlight job(s)", reclaimed)
                         | None -> ()
-                        let! polledJobs = config.DataLayer.Poll () |> Async.AwaitTask
+                        let! enqueuedRecurring = dataLayer.EnqueueDueRecurring DateTime.UtcNow |> Async.AwaitTask
+                        if enqueuedRecurring > 0 then
+                            logger.LogInformation("Enqueued {Count} recurring job occurrence(s)", enqueuedRecurring)
+                        let! polledJobs = dataLayer.Poll claimLimit |> Async.AwaitTask
                         if not polledJobs.IsEmpty then
                             logger.LogInformation("Poll returned {JobCount} job(s)", polledJobs.Length)
                         inbox.Post(QueueJobs polledJobs)
@@ -150,38 +181,42 @@ module Scheduler =
                             let! message = inbox.Receive()
                             match message with
                             | Completed job ->
-                                let doneJob = { job with CompletedAt = Some DateTime.UtcNow }
-                                try
-                                    do! config.DataLayer.SetDone doneJob |> Async.AwaitTask
-                                with ex ->
-                                    logger.LogError(ex, "SetDone failed for job {JobId}", job.Id)
+                                do! markDone job
                                 return! drain tcs (inFlight - 1)
                             | Failed (job, errorMsg) ->
                                 do! handleFailed { job with ErrorMessage = errorMsg }
                                 return! drain tcs (inFlight - 1)
-                            | _ -> return! drain tcs inFlight
+                            | Cancelled job ->
+                                do! releaseJob job
+                                return! drain tcs (inFlight - 1)
+                            | QueueJobs jobs ->
+                                // Claimed by a poll that was already in progress; give them back.
+                                for job in jobs do
+                                    do! releaseJob job
+                                return! drain tcs inFlight
+                            | PollFailed _ | Shutdown _ -> return! drain tcs inFlight
                     }
 
                 let rec loop polling inFlight queue =
                     async {
                         let polling =
                             if not polling then
-                                Async.Start (poll inbox config.PollingInterval)
+                                Async.Start (poll inbox config.PollingInterval (availableSlots inFlight queue))
                                 true
                             else polling
 
                         let! message = inbox.Receive()
                         match message with
                         | Completed job ->
-                            let doneJob = { job with CompletedAt = Some DateTime.UtcNow }
-                            try
-                                do! config.DataLayer.SetDone doneJob |> Async.AwaitTask
-                            with ex ->
-                                logger.LogError(ex, "SetDone failed for job {JobId}", job.Id)
+                            do! markDone job
                             let! inFlight, queue = dequeue (inFlight - 1) queue
                             return! loop polling inFlight queue
                         | Failed (job, errorMsg) ->
                             do! handleFailed { job with ErrorMessage = errorMsg }
+                            let! inFlight, queue = dequeue (inFlight - 1) queue
+                            return! loop polling inFlight queue
+                        | Cancelled job ->
+                            do! releaseJob job
                             let! inFlight, queue = dequeue (inFlight - 1) queue
                             return! loop polling inFlight queue
                         | QueueJobs jobs ->
@@ -195,13 +230,22 @@ module Scheduler =
                         | Shutdown tcs ->
                             logger.LogInformation("Scheduler shutting down, {InFlight} job(s) in flight", inFlight)
                             cts.Cancel()
+                            // Jobs still in the local queue were claimed (InFlight in the
+                            // data layer) but never started — give them back.
+                            for job in queue do
+                                do! releaseJob job
                             return! drain tcs inFlight
                     }
-                loop false 0 []
+
+                // First poll runs immediately; subsequent polls wait the configured interval.
+                Async.Start (poll inbox TimeSpan.Zero (availableSlots 0 []))
+                loop true 0 []
                 )
-            inbox.Error.Add(fun ex ->
-                logger.LogCritical(ex, "Scheduler MailboxProcessor crashed with unhandled exception"))
             let tcs = TaskCompletionSource<unit>()
+            inbox.Error.Add(fun ex ->
+                logger.LogCritical(ex, "Scheduler MailboxProcessor crashed with unhandled exception")
+                // Without this, Stop() would hang forever waiting on a dead mailbox.
+                tcs.TrySetException ex |> ignore)
             SchedulerHandle(fun () ->
                 inbox.Post(Shutdown tcs)
                 tcs.Task :> Task)
@@ -212,7 +256,7 @@ module Scheduler =
         /// <param name="datalayer">The `IDataLayer` implementation to use.</param>
         [<CustomOperation("with_datalayer")>]
         member x.Datalayer (config: SchedulerSpec<'t>, datalayer: IDataLayer<'t>) =
-            { config with DataLayer = datalayer }
+            { config with DataLayer = Some datalayer }
 
         /// <summary>
         /// Specifies how often to poll the datalayer for new jobs.

@@ -51,39 +51,36 @@ type SteveDashboardExtensions =
             do! JsonSerializer.SerializeAsync(ctx.Response.Body, stats, DashboardApi.jsonOptions)
         })) |> ignore
 
+        // Shared handler shape for retry/requeue: parse the ID, run the action,
+        // map its outcome to a status code.
+        let mapJobAction (notFoundMessage: string) (action: Guid -> Task<JobActionResult>) =
+            Func<HttpContext, Task>(fun ctx -> task {
+                let idStr = ctx.Request.RouteValues.["id"] :?> string
+                match Guid.TryParse idStr with
+                | true, id ->
+                    let! result = action id
+                    ctx.Response.ContentType <- "application/json"
+                    match result with
+                    | Succeeded ->
+                        do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = true |}, DashboardApi.jsonOptions)
+                    | NotFound ->
+                        ctx.Response.StatusCode <- 404
+                        do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = false; error = notFoundMessage |}, DashboardApi.jsonOptions)
+                    | DuplicateActive ->
+                        ctx.Response.StatusCode <- 409
+                        do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = false; error = "An active job with the same dedup key already exists" |}, DashboardApi.jsonOptions)
+                | _ ->
+                    ctx.Response.StatusCode <- 400
+                    do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| error = "Invalid job ID" |}, DashboardApi.jsonOptions)
+            })
+
         // POST /api/jobs/{id}/retry
-        app.MapPost(prefix + "/api/jobs/{id}/retry", Func<HttpContext, Task>(fun ctx -> task {
-            let idStr = ctx.Request.RouteValues.["id"] :?> string
-            match Guid.TryParse idStr with
-            | true, id ->
-                let! success = DashboardApi.retryJob dl id
-                ctx.Response.ContentType <- "application/json"
-                if success then
-                    do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = true |}, DashboardApi.jsonOptions)
-                else
-                    ctx.Response.StatusCode <- 404
-                    do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = false; error = "Job not found or not in Failed state" |}, DashboardApi.jsonOptions)
-            | _ ->
-                ctx.Response.StatusCode <- 400
-                do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| error = "Invalid job ID" |}, DashboardApi.jsonOptions)
-        })) |> ignore
+        app.MapPost(prefix + "/api/jobs/{id}/retry",
+            mapJobAction "Job not found or not in Failed state" (DashboardApi.retryJob dl)) |> ignore
 
         // POST /api/jobs/{id}/requeue
-        app.MapPost(prefix + "/api/jobs/{id}/requeue", Func<HttpContext, Task>(fun ctx -> task {
-            let idStr = ctx.Request.RouteValues.["id"] :?> string
-            match Guid.TryParse idStr with
-            | true, id ->
-                let! success = DashboardApi.requeueJob dl id
-                ctx.Response.ContentType <- "application/json"
-                if success then
-                    do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = true |}, DashboardApi.jsonOptions)
-                else
-                    ctx.Response.StatusCode <- 404
-                    do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| ok = false; error = "Job not found" |}, DashboardApi.jsonOptions)
-            | _ ->
-                ctx.Response.StatusCode <- 400
-                do! JsonSerializer.SerializeAsync(ctx.Response.Body, {| error = "Invalid job ID" |}, DashboardApi.jsonOptions)
-        })) |> ignore
+        app.MapPost(prefix + "/api/jobs/{id}/requeue",
+            mapJobAction "Job not found" (DashboardApi.requeueJob dl)) |> ignore
 
         // DELETE /api/jobs/{id}
         app.MapDelete(prefix + "/api/jobs/{id}", Func<HttpContext, Task>(fun ctx -> task {

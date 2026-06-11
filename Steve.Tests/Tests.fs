@@ -208,48 +208,58 @@ module InMemoryTests =
     let ``Register then Poll returns job`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(1, List.length jobs)
 
     [<Fact>]
     let ``Schedule future job not returned by Poll`` () =
         let dl = InMemory.create<TestTask>()
         dl.Schedule (Add(1, 2)) (DateTime.UtcNow.AddHours 1.0) |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Empty(jobs)
 
     [<Fact>]
     let ``Schedule past job returned by Poll`` () =
         let dl = InMemory.create<TestTask>()
         dl.Schedule (Add(1, 2)) (DateTime.UtcNow.AddHours -1.0) |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(1, List.length jobs)
 
     [<Fact>]
     let ``SetDone marks job as Done`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetDone(jobs.Head).Wait()
-        let afterPoll = dl.Poll().Result
+        let afterPoll = dl.Poll(100).Result
         Assert.Empty(afterPoll)
 
     [<Fact>]
-    let ``SetInFlight marks job as InFlight`` () =
+    let ``Release returns InFlight job to Waiting`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 2)).Wait()
-        let jobs = dl.Poll().Result
-        dl.SetInFlight(jobs.Head).Wait()
-        let afterPoll = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
+        dl.Release(jobs.Head).Wait()
+        let afterPoll = dl.Poll(100).Result
+        Assert.Single(afterPoll) |> ignore
+
+    [<Fact>]
+    let ``Release does not touch non-InFlight jobs`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.Register(Add(1, 2)).Wait()
+        let jobs = dl.Poll(100).Result
+        dl.SetDone(jobs.Head).Wait()
+        dl.Release(jobs.Head).Wait()
+        let afterPoll = dl.Poll(100).Result
         Assert.Empty(afterPoll)
 
     [<Fact>]
     let ``SetFailed marks job as Failed`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetFailed(jobs.Head).Wait()
-        let afterPoll = dl.Poll().Result
+        let afterPoll = dl.Poll(100).Result
         Assert.Empty(afterPoll)
 
     [<Fact>]
@@ -258,8 +268,27 @@ module InMemoryTests =
         dl.Register(Add(1, 2)).Wait()
         dl.Register(Add(3, 4)).Wait()
         dl.Register(Greet "yo").Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(3, List.length jobs)
+
+    [<Fact>]
+    let ``Poll respects maxCount`` () =
+        let dl = InMemory.create<TestTask>()
+        for i in 1..5 do
+            dl.Register(Add(i, i)).Wait()
+        let first = dl.Poll(2).Result
+        Assert.Equal(2, List.length first)
+        let rest = dl.Poll(100).Result
+        Assert.Equal(3, List.length rest)
+
+    [<Fact>]
+    let ``Poll with zero maxCount claims nothing`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.Register(Add(1, 2)).Wait()
+        let none = dl.Poll(0).Result
+        Assert.Empty(none)
+        let all = dl.Poll(100).Result
+        Assert.Single(all) |> ignore
 
 // ─── Scheduler Integration ───
 
@@ -488,21 +517,21 @@ module InMemoryAdditionalTests =
     let ``RegisterSafe works same as Register`` () =
         let dl = InMemory.create<TestTask>()
         dl.RegisterSafe (Add(1, 2)) null |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(1, List.length jobs)
 
     [<Fact>]
     let ``ScheduleSafe works same as Schedule`` () =
         let dl = InMemory.create<TestTask>()
         dl.ScheduleSafe (Add(1, 2)) (DateTime.UtcNow.AddHours -1.0) null |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(1, List.length jobs)
 
     [<Fact>]
     let ``ScheduleSafe future job not returned by Poll`` () =
         let dl = InMemory.create<TestTask>()
         dl.ScheduleSafe (Add(1, 2)) (DateTime.UtcNow.AddHours 1.0) null |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Empty(jobs)
 
     [<Fact>]
@@ -512,10 +541,10 @@ module InMemoryAdditionalTests =
         dl.SetDone(phantom).Wait()
 
     [<Fact>]
-    let ``SetInFlight on nonexistent job does not crash`` () =
+    let ``Release on nonexistent job does not crash`` () =
         let dl = InMemory.create<TestTask>()
         let phantom = { Id = Guid.NewGuid(); Task = ""; Status = Waiting; OnlyRunAfter = None; LastUpdated = DateTime.UtcNow; RetryCount = 0; StartedAt = None; CompletedAt = None; ErrorMessage = None; DedupKey = None }
-        dl.SetInFlight(phantom).Wait()
+        dl.Release(phantom).Wait()
 
     [<Fact>]
     let ``SetFailed on nonexistent job does not crash`` () =
@@ -526,7 +555,7 @@ module InMemoryAdditionalTests =
     [<Fact>]
     let ``Poll returns empty on fresh datalayer`` () =
         let dl = InMemory.create<TestTask>()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Empty(jobs)
 
     [<Fact>]
@@ -543,7 +572,7 @@ module InMemoryAdditionalTests =
                 System.Threading.Tasks.Task.Run(fun () ->
                     dl.Register(Add(i, i)).Wait()) |]
         System.Threading.Tasks.Task.WaitAll(tasks)
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(50, List.length jobs)
 
     [<Fact>]
@@ -552,17 +581,17 @@ module InMemoryAdditionalTests =
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
         dl.Register(Add(3, 3)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(3, List.length jobs)
         // Second poll returns empty - all already claimed
-        let second = dl.Poll().Result
+        let second = dl.Poll(100).Result
         Assert.Empty(second)
 
     [<Fact>]
     let ``Poll returns jobs with InFlight status`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(Job.InFlight, jobs.[0].Status)
 
 // ─── Scheduler additional integration ───
@@ -721,7 +750,7 @@ module SchedulerAdditionalTests =
         Assert.True(completed)
         // Give scheduler time to call SetDone
         Thread.Sleep(200)
-        let remaining = dl.Poll().Result
+        let remaining = dl.Poll(100).Result
         Assert.Empty(remaining)
         handle.Stop().Wait()
 
@@ -752,7 +781,7 @@ module SchedulerAdditionalTests =
         Assert.True(received)
         // Give scheduler time to call SetFailed
         Thread.Sleep(200)
-        let remaining = dl.Poll().Result
+        let remaining = dl.Poll(100).Result
         Assert.Empty(remaining)
         handle.Stop().Wait()
 
@@ -868,7 +897,7 @@ module DataLayerEmptyTests =
     [<Fact>]
     let ``empty Poll returns empty`` () =
         let dl = Steve.DataLayer.empty() : Steve.DataLayer.IDataLayer<TestTask>
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Empty(jobs)
 
     [<Fact>]
@@ -878,10 +907,10 @@ module DataLayerEmptyTests =
         dl.SetDone(job).Wait()
 
     [<Fact>]
-    let ``empty SetInFlight completes`` () =
+    let ``empty Release completes`` () =
         let dl = Steve.DataLayer.empty() : Steve.DataLayer.IDataLayer<TestTask>
         let job = { Id = Guid.NewGuid(); Task = ""; Status = Waiting; OnlyRunAfter = None; LastUpdated = DateTime.UtcNow; RetryCount = 0; StartedAt = None; CompletedAt = None; ErrorMessage = None; DedupKey = None }
-        dl.SetInFlight(job).Wait()
+        dl.Release(job).Wait()
 
     [<Fact>]
     let ``empty SetFailed completes`` () =
@@ -936,13 +965,13 @@ module InMemoryTimestampTests =
     let ``SetDone updates LastUpdated`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let before = jobs.Head.LastUpdated
         Thread.Sleep(50)
         dl.SetDone(jobs.Head).Wait()
         // Re-register to check - since done jobs won't poll, check indirectly
         // by registering new job and verifying old one doesn't appear
-        let afterPoll = dl.Poll().Result
+        let afterPoll = dl.Poll(100).Result
         Assert.Empty(afterPoll)
 
     [<Fact>]
@@ -950,31 +979,32 @@ module InMemoryTimestampTests =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetDone(jobs.[0]).Wait()
         // Re-register a new Waiting job to verify Poll still works
         dl.Register(Add(3, 3)).Wait()
-        let newJobs = dl.Poll().Result
+        let newJobs = dl.Poll(100).Result
         Assert.Equal(1, List.length newJobs)
 
     [<Fact>]
-    let ``SetInFlight is idempotent`` () =
+    let ``Release is idempotent`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
-        let jobs = dl.Poll().Result
-        // Already InFlight from Poll, SetInFlight again should not crash
-        dl.SetInFlight(jobs.[0]).Wait()
+        let jobs = dl.Poll(100).Result
+        dl.Release(jobs.[0]).Wait()
+        // Already back to Waiting, releasing again should not crash
+        dl.Release(jobs.[0]).Wait()
 
     [<Fact>]
     let ``SetFailed only affects target job`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetFailed(jobs.[0]).Wait()
         // Re-register a new Waiting job to verify Poll still works
         dl.Register(Add(3, 3)).Wait()
-        let newJobs = dl.Poll().Result
+        let newJobs = dl.Poll(100).Result
         Assert.Equal(1, List.length newJobs)
 
     [<Fact>]
@@ -982,14 +1012,14 @@ module InMemoryTimestampTests =
         let dl = InMemory.create<TestTask>()
         for _ in 1..20 do
             dl.Register(Add(1, 1)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let tasks =
             [| for j in jobs ->
                 System.Threading.Tasks.Task.Run(fun () ->
-                    dl.Poll().Result |> ignore
+                    dl.Poll(100).Result |> ignore
                     dl.SetDone(j).Wait()) |]
         System.Threading.Tasks.Task.WaitAll(tasks)
-        let remaining = dl.Poll().Result
+        let remaining = dl.Poll(100).Result
         Assert.Empty(remaining)
 
 // ─── Scheduler poll failure recovery ───
@@ -1007,18 +1037,21 @@ module SchedulerPollFailureTests =
             member _.Schedule t d = realDl.Schedule t d
             member _.ScheduleSafe t d txn = realDl.ScheduleSafe t d txn
             member _.SetDone j = realDl.SetDone j
-            member _.SetInFlight j = realDl.SetInFlight j
             member _.SetFailed j = realDl.SetFailed j
+            member _.Release j = realDl.Release j
             member _.SetRetry j d = realDl.SetRetry j d
             member _.ReclaimStale t = realDl.ReclaimStale t
             member _.RegisterWithDedup t k = realDl.RegisterWithDedup t k
             member _.ScheduleWithDedup t d k = realDl.ScheduleWithDedup t d k
-            member _.Poll() =
+            member _.UpsertRecurring j = realDl.UpsertRecurring j
+            member _.RemoveRecurring n = realDl.RemoveRecurring n
+            member _.EnqueueDueRecurring now = realDl.EnqueueDueRecurring now
+            member _.Poll maxCount =
                 let n = Interlocked.Increment(&pollCalls)
                 if n <= failCount then
                     Task.FromException<Job.JobRecord list>(exn "poll failed")
                 else
-                    realDl.Poll() }
+                    realDl.Poll maxCount }
 
     [<Fact>]
     let ``Scheduler recovers after poll failure`` () =
@@ -1191,6 +1224,36 @@ module SchedulerShutdownTests =
 
         // Only the first job should have run
         Assert.Equal(1, Volatile.Read(&jobCount))
+
+    [<Fact>]
+    let ``Cancelled job is released back to Waiting on shutdown`` () =
+        let dl = InMemory.create<TestTask>()
+        let jobStarted = new ManualResetEventSlim(false)
+
+        let evaluator (t: TestTask) (ct: CancellationToken) : Task = task {
+            match t with
+            | Add _ ->
+                jobStarted.Set()
+                do! Task.Delay(Timeout.Infinite, ct)
+            | _ -> ()
+        }
+
+        let handle = schedulerBuilder<TestTask> () {
+            with_datalayer dl
+            with_polling_interval (TimeSpan.FromMilliseconds 50.0)
+            with_max_jobs 1
+            with_evaluator evaluator
+        }
+
+        dl.Register(Add(1, 1)).Wait()
+        Assert.True(jobStarted.Wait(TimeSpan.FromSeconds 5.0), "Job should start")
+
+        let stopped = handle.Stop().Wait(TimeSpan.FromSeconds 5.0)
+        Assert.True(stopped, "Stop should complete once the job observes cancellation")
+
+        // The interrupted job must not be marked Done — it goes back to Waiting.
+        let reclaimable = dl.Poll(100).Result
+        Assert.Single(reclaimable) |> ignore
 
 // ─── SchedulerHandle.DisposeAsync ───
 
@@ -1513,14 +1576,17 @@ module JobRetryTests =
                 member _.RegisterSafe t txn = dl.RegisterSafe t txn
                 member _.Schedule t d = dl.Schedule t d
                 member _.ScheduleSafe t d txn = dl.ScheduleSafe t d txn
-                member _.Poll() = dl.Poll()
+                member _.Poll maxCount = dl.Poll maxCount
                 member _.SetDone j = dl.SetDone j
-                member _.SetInFlight j = dl.SetInFlight j
+                member _.Release j = dl.Release j
                 member _.SetFailed j = dl.SetFailed j
                 member _.SetRetry _ _ = Task.FromException(exn "SetRetry broken")
                 member _.ReclaimStale t = dl.ReclaimStale t
                 member _.RegisterWithDedup t k = dl.RegisterWithDedup t k
-                member _.ScheduleWithDedup t d k = dl.ScheduleWithDedup t d k }
+                member _.ScheduleWithDedup t d k = dl.ScheduleWithDedup t d k
+                member _.UpsertRecurring j = dl.UpsertRecurring j
+                member _.RemoveRecurring n = dl.RemoveRecurring n
+                member _.EnqueueDueRecurring now = dl.EnqueueDueRecurring now }
 
         let evaluator (t: TestTask) (_ct: CancellationToken) : Task = task {
             match t with
@@ -1575,7 +1641,7 @@ module InMemoryDashboardTests =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetDone(polled.[0]).Wait()
         let jobs, total = dash.QueryJobs({ Status = Some Job.Done; Page = 1; PageSize = 10 }).Result
         Assert.Equal(1, total)
@@ -1615,7 +1681,7 @@ module InMemoryDashboardTests =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetDone(polled.[0]).Wait()
         dl.SetFailed(polled.[1]).Wait()
         dl.Register(Add(3, 3)).Wait()
@@ -1628,37 +1694,37 @@ module InMemoryDashboardTests =
     let ``RetryJob resets failed job to Waiting`` () =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetFailed(polled.[0]).Wait()
         let id = polled.[0].Id
         let result = dash.RetryJob(id).Result
-        Assert.True(result)
+        Assert.Equal(JobActionResult.Succeeded, result)
         let job = dash.GetJob(id).Result
         Assert.Equal(Job.Waiting, job.Value.Status)
 
     [<Fact>]
-    let ``RetryJob returns false for non-failed job`` () =
+    let ``RetryJob returns NotFound for non-failed job`` () =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
         let all, _ = dash.QueryJobs({ Status = None; Page = 1; PageSize = 10 }).Result
         let result = dash.RetryJob(all.[0].Id).Result
-        Assert.False(result)
+        Assert.Equal(JobActionResult.NotFound, result)
 
     [<Fact>]
-    let ``RetryJob returns false for nonexistent id`` () =
+    let ``RetryJob returns NotFound for nonexistent id`` () =
         let _, dash = createDashboard()
         let result = dash.RetryJob(Guid.NewGuid()).Result
-        Assert.False(result)
+        Assert.Equal(JobActionResult.NotFound, result)
 
     [<Fact>]
     let ``RequeueJob resets done job to Waiting`` () =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetDone(polled.[0]).Wait()
         let id = polled.[0].Id
         let result = dash.RequeueJob(id).Result
-        Assert.True(result)
+        Assert.Equal(JobActionResult.Succeeded, result)
         let job = dash.GetJob(id).Result
         Assert.Equal(Job.Waiting, job.Value.Status)
         Assert.Equal(0, job.Value.RetryCount)
@@ -1667,19 +1733,45 @@ module InMemoryDashboardTests =
     let ``RequeueJob resets failed job to Waiting`` () =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetFailed(polled.[0]).Wait()
         let id = polled.[0].Id
         let result = dash.RequeueJob(id).Result
-        Assert.True(result)
+        Assert.Equal(JobActionResult.Succeeded, result)
         let job = dash.GetJob(id).Result
         Assert.Equal(Job.Waiting, job.Value.Status)
 
     [<Fact>]
-    let ``RequeueJob returns false for nonexistent id`` () =
+    let ``RequeueJob returns NotFound for nonexistent id`` () =
         let _, dash = createDashboard()
         let result = dash.RequeueJob(Guid.NewGuid()).Result
-        Assert.False(result)
+        Assert.Equal(JobActionResult.NotFound, result)
+
+    [<Fact>]
+    let ``RequeueJob returns DuplicateActive when dedup key is held by an active job`` () =
+        let dl, dash = createDashboard()
+        Assert.True(dl.RegisterWithDedup (Add(1, 1)) "dup-key" |> fun t -> t.Result)
+        let polled = dl.Poll(100).Result
+        dl.SetDone(polled.[0]).Wait()
+        // Key is free again, so a second active job can take it
+        Assert.True(dl.RegisterWithDedup (Add(2, 2)) "dup-key" |> fun t -> t.Result)
+        let result = dash.RequeueJob(polled.[0].Id).Result
+        Assert.Equal(JobActionResult.DuplicateActive, result)
+        // The Done job must be untouched
+        let job = dash.GetJob(polled.[0].Id).Result
+        Assert.Equal(Job.Done, job.Value.Status)
+
+    [<Fact>]
+    let ``RetryJob returns DuplicateActive when dedup key is held by an active job`` () =
+        let dl, dash = createDashboard()
+        Assert.True(dl.RegisterWithDedup (Add(1, 1)) "dup-key" |> fun t -> t.Result)
+        let polled = dl.Poll(100).Result
+        dl.SetFailed(polled.[0]).Wait()
+        Assert.True(dl.RegisterWithDedup (Add(2, 2)) "dup-key" |> fun t -> t.Result)
+        let result = dash.RetryJob(polled.[0].Id).Result
+        Assert.Equal(JobActionResult.DuplicateActive, result)
+        let job = dash.GetJob(polled.[0].Id).Result
+        Assert.Equal(Job.Failed, job.Value.Status)
 
     [<Fact>]
     let ``DeleteJob removes job`` () =
@@ -1703,7 +1795,7 @@ module InMemoryDashboardTests =
         let dl, dash = createDashboard()
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(2, 2)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         dl.SetDone(polled.[0]).Wait()
         dl.SetDone(polled.[1]).Wait()
         // Jobs were just created so olderThan=0 should purge them
@@ -1820,7 +1912,7 @@ module StaleReclamationTests =
         dl.Register(Add(1, 1)).Wait()
 
         // Poll to set InFlight
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(1, jobs.Length)
         Assert.Equal(InFlight, jobs.[0].Status)
 
@@ -1829,14 +1921,14 @@ module StaleReclamationTests =
         Assert.Equal(1, reclaimed)
 
         // Job should be Waiting again
-        let jobs2 = dl.Poll().Result
+        let jobs2 = dl.Poll(100).Result
         Assert.Equal(1, jobs2.Length)
 
     [<Fact>]
     let ``ReclaimStale does not touch jobs within timeout`` () =
         let dl = InMemory.create<TestTask>()
         dl.Register(Add(1, 1)).Wait()
-        dl.Poll().Result |> ignore
+        dl.Poll(100).Result |> ignore
 
         // Reclaim with large timeout — nothing stale
         let reclaimed = dl.ReclaimStale(TimeSpan.FromHours 1.0).Result
@@ -1863,7 +1955,7 @@ module StaleReclamationTests =
 
         // Register a job, poll it to InFlight manually (simulating a crashed worker)
         dl.Register(Add(1, 1)).Wait()
-        dl.Poll().Result |> ignore // now InFlight with StartedAt = now
+        dl.Poll(100).Result |> ignore // now InFlight with StartedAt = now
 
         // Start scheduler with very short stale timeout
         let handle = schedulerBuilder<TestTask> () {
@@ -1894,7 +1986,7 @@ module HostedServiceTests =
 
         let svc = SteveHostedService<TestTask>(fun spec ->
             { spec with
-                DataLayer = dl
+                DataLayer = Some dl
                 PollingInterval = TimeSpan.FromMilliseconds 50.0
                 Evaluator = Some (fun (_: TestTask) (_ct: CancellationToken) -> task { evaluated.Set() } :> Task) })
 
@@ -1942,7 +2034,7 @@ module DeduplicationTests =
         (dl.RegisterWithDedup (Add(1, 1)) "key1").Result |> ignore
 
         // Poll and complete the job
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetDone({ jobs.[0] with CompletedAt = Some DateTime.UtcNow }).Wait()
 
         // Same key should now be allowed
@@ -1954,7 +2046,7 @@ module DeduplicationTests =
         let dl = InMemory.create<TestTask>()
         (dl.RegisterWithDedup (Add(1, 1)) "key1").Result |> ignore
 
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         dl.SetFailed({ jobs.[0] with ErrorMessage = Some "boom" }).Wait()
 
         let result = (dl.RegisterWithDedup (Add(3, 3)) "key1").Result
@@ -1966,7 +2058,7 @@ module DeduplicationTests =
         (dl.RegisterWithDedup (Add(1, 1)) "key1").Result |> ignore
 
         // Poll sets it InFlight
-        dl.Poll().Result |> ignore
+        dl.Poll(100).Result |> ignore
 
         let result = (dl.RegisterWithDedup (Add(2, 2)) "key1").Result
         Assert.False(result)
@@ -1999,5 +2091,192 @@ module DeduplicationTests =
         dl.Register(Add(1, 1)).Wait()
         dl.Register(Add(1, 1)).Wait()
         // Both should exist — no dedup
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.Equal(2, jobs.Length)
+
+// ─── Schedule ───
+
+module ScheduleTests =
+    [<Fact>]
+    let ``Every roundtrips through serialize/deserialize`` () =
+        let schedule = Every (TimeSpan.FromMinutes 90.0)
+        Assert.Equal(schedule, Schedule.serialize schedule |> Schedule.deserialize)
+
+    [<Fact>]
+    let ``Cron roundtrips through serialize/deserialize`` () =
+        let schedule = Cron "*/5 * * * *"
+        Assert.Equal(schedule, Schedule.serialize schedule |> Schedule.deserialize)
+
+    [<Fact>]
+    let ``deserialize invalid string throws`` () =
+        Assert.ThrowsAny<exn>(fun () -> Schedule.deserialize "bogus" |> ignore) |> ignore
+
+    [<Fact>]
+    let ``nextOccurrence for Every adds the interval`` () =
+        let now = DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc)
+        let next = Schedule.nextOccurrence (Every (TimeSpan.FromHours 1.0)) now
+        Assert.Equal(Some (now.AddHours 1.0), next)
+
+    [<Fact>]
+    let ``nextOccurrence for Cron finds next match`` () =
+        // Daily at 03:00 UTC
+        let now = DateTime(2026, 6, 11, 12, 0, 0, DateTimeKind.Utc)
+        let next = Schedule.nextOccurrence (Cron "0 3 * * *") now
+        Assert.Equal(Some (DateTime(2026, 6, 12, 3, 0, 0, DateTimeKind.Utc)), next)
+
+    [<Fact>]
+    let ``nextOccurrence throws for malformed cron`` () =
+        Assert.ThrowsAny<exn>(fun () ->
+            Schedule.nextOccurrence (Cron "not a cron") DateTime.UtcNow |> ignore) |> ignore
+
+// ─── Recurring jobs (InMemory) ───
+
+module RecurringTests =
+    let recurringJob name schedule : Recurring.RecurringJob<TestTask> =
+        { Name = name; Task = Add(1, 1); Schedule = schedule }
+
+    [<Fact>]
+    let ``EnqueueDueRecurring enqueues a job when due`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromMinutes 5.0))).Wait()
+        let enqueued = dl.EnqueueDueRecurring(DateTime.UtcNow.AddMinutes 6.0).Result
+        Assert.Equal(1, enqueued)
+        let jobs = dl.Poll(100).Result
+        Assert.Single(jobs) |> ignore
+        Assert.Equal(Some "recurring:tick", jobs.Head.DedupKey)
+
+    [<Fact>]
+    let ``EnqueueDueRecurring does nothing before the schedule is due`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromHours 1.0))).Wait()
+        let enqueued = dl.EnqueueDueRecurring(DateTime.UtcNow).Result
+        Assert.Equal(0, enqueued)
+        Assert.Empty(dl.Poll(100).Result)
+
+    [<Fact>]
+    let ``Due definition fires once per occurrence, not repeatedly`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromHours 1.0))).Wait()
+        let due = DateTime.UtcNow.AddMinutes 61.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(due).Result)
+        // Same moment again: NextRun has advanced, nothing new fires
+        Assert.Equal(0, dl.EnqueueDueRecurring(due).Result)
+
+    [<Fact>]
+    let ``Still-active previous occurrence suppresses the next one but NextRun advances`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromMinutes 1.0))).Wait()
+        let first = DateTime.UtcNow.AddMinutes 2.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(first).Result)
+        // Occurrence not processed (still Waiting); next due fire is suppressed
+        let second = first.AddMinutes 2.0
+        Assert.Equal(0, dl.EnqueueDueRecurring(second).Result)
+        // But the schedule itself moved on: complete the job and the one after fires
+        let jobs = dl.Poll(100).Result
+        dl.SetDone(jobs.Head).Wait()
+        let third = second.AddMinutes 2.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(third).Result)
+
+    [<Fact>]
+    let ``Failed occurrence does not kill the recurrence`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromMinutes 1.0))).Wait()
+        let first = DateTime.UtcNow.AddMinutes 2.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(first).Result)
+        let jobs = dl.Poll(100).Result
+        dl.SetFailed(jobs.Head).Wait()
+        let second = first.AddMinutes 2.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(second).Result)
+
+    [<Fact>]
+    let ``Upsert with same schedule preserves NextRun`` () =
+        let dl = InMemory.create<TestTask>()
+        let schedule = Every (TimeSpan.FromHours 24.0)
+        dl.UpsertRecurring(recurringJob "daily" schedule).Wait()
+        let firstDue = DateTime.UtcNow.AddHours 25.0
+        Assert.Equal(1, dl.EnqueueDueRecurring(firstDue).Result)
+        // Complete the occurrence so dedup doesn't interfere with later asserts
+        let jobs = dl.Poll(100).Result
+        dl.SetDone(jobs.Head).Wait()
+        // Simulate an app restart re-upserting the same definition.
+        // NextRun must stay at firstDue + 24h, not reset to UtcNow + 24h —
+        // otherwise a daily job on a daily-restarted app would never fire.
+        dl.UpsertRecurring(recurringJob "daily" schedule).Wait()
+        Assert.Equal(0, dl.EnqueueDueRecurring(DateTime.UtcNow.AddHours 26.0).Result)
+        Assert.Equal(1, dl.EnqueueDueRecurring(firstDue.AddHours 25.0).Result)
+
+    [<Fact>]
+    let ``Upsert with changed schedule recomputes NextRun`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "job" (Every (TimeSpan.FromMinutes 1.0))).Wait()
+        dl.UpsertRecurring(recurringJob "job" (Every (TimeSpan.FromHours 5.0))).Wait()
+        // Old schedule would be due after 2 minutes; new one is not
+        Assert.Equal(0, dl.EnqueueDueRecurring(DateTime.UtcNow.AddMinutes 2.0).Result)
+        Assert.Equal(1, dl.EnqueueDueRecurring(DateTime.UtcNow.AddHours 6.0).Result)
+
+    [<Fact>]
+    let ``RemoveRecurring stops future occurrences`` () =
+        let dl = InMemory.create<TestTask>()
+        dl.UpsertRecurring(recurringJob "tick" (Every (TimeSpan.FromMinutes 1.0))).Wait()
+        Assert.True(dl.RemoveRecurring("tick").Result)
+        Assert.Equal(0, dl.EnqueueDueRecurring(DateTime.UtcNow.AddHours 1.0).Result)
+
+    [<Fact>]
+    let ``RemoveRecurring returns false for unknown name`` () =
+        let dl = InMemory.create<TestTask>()
+        Assert.False(dl.RemoveRecurring("nope").Result)
+
+// ─── Recurring jobs (scheduler integration) ───
+
+module RecurringSchedulerTests =
+    [<Fact>]
+    let ``Scheduler fires a recurring job repeatedly`` () =
+        let dl = InMemory.create<TestTask>()
+        let mutable runs = 0
+        let ranTwice = new ManualResetEventSlim(false)
+
+        let evaluator (t: TestTask) (_ct: CancellationToken) : Task = task {
+            match t with
+            | Add(7, 7) ->
+                if Interlocked.Increment(&runs) >= 2 then ranTwice.Set()
+            | _ -> ()
+        }
+
+        dl.UpsertRecurring({ Name = "fast"; Task = Add(7, 7); Schedule = Every (TimeSpan.FromMilliseconds 50.0) }).Wait()
+
+        let handle = schedulerBuilder<TestTask> () {
+            with_datalayer dl
+            with_polling_interval (TimeSpan.FromMilliseconds 50.0)
+            with_evaluator evaluator
+        }
+
+        let fired = ranTwice.Wait(TimeSpan.FromSeconds 10.0)
+        handle.Stop().Wait()
+        Assert.True(fired, "Recurring job should have run at least twice")
+
+    [<Fact>]
+    let ``Recurrence survives occurrences that always fail`` () =
+        let dl = InMemory.create<TestTask>()
+        let mutable attempts = 0
+        let failedTwice = new ManualResetEventSlim(false)
+
+        let evaluator (t: TestTask) (_ct: CancellationToken) : Task = task {
+            match t with
+            | Greet _ ->
+                if Interlocked.Increment(&attempts) >= 2 then failedTwice.Set()
+                failwith "always fails"
+            | _ -> ()
+        }
+
+        dl.UpsertRecurring({ Name = "doomed"; Task = Greet "boom"; Schedule = Every (TimeSpan.FromMilliseconds 50.0) }).Wait()
+
+        let handle = schedulerBuilder<TestTask> () {
+            with_datalayer dl
+            with_polling_interval (TimeSpan.FromMilliseconds 50.0)
+            with_evaluator evaluator
+        }
+
+        // With zero retries each occurrence fails permanently, yet new occurrences keep coming
+        let fired = failedTwice.Wait(TimeSpan.FromSeconds 10.0)
+        handle.Stop().Wait()
+        Assert.True(fired, "Recurrence should outlive permanently failed occurrences")

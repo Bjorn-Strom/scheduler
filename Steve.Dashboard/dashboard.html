@@ -225,12 +225,14 @@ function esc(s) {
 function goPage(p) { currentPage = p; loadJobs(); }
 
 async function retryJob(id) {
-  await api('/jobs/' + id + '/retry', { method: 'POST' });
+  const res = await api('/jobs/' + id + '/retry', { method: 'POST' });
+  if (res && res.error) alert(res.error);
   refresh();
 }
 
 async function requeueJob(id) {
-  await api('/jobs/' + id + '/requeue', { method: 'POST' });
+  const res = await api('/jobs/' + id + '/requeue', { method: 'POST' });
+  if (res && res.error) alert(res.error);
   refresh();
 }
 

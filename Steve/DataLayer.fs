@@ -44,9 +44,11 @@ module DataLayer =
         abstract member ScheduleSafe: 't -> DateTime -> IDbTransaction -> Task
 
         /// <summary>
-        /// Gets all jobs in the pool
+        /// Atomically claims up to maxCount runnable jobs and marks them InFlight.
+        /// Returns the claimed jobs. A maxCount of zero or less claims nothing.
         /// </summary>
-        abstract member Poll: unit -> Task<Job.JobRecord list>
+        /// <param name="maxCount">The maximum number of jobs to claim.</param>
+        abstract member Poll: int -> Task<Job.JobRecord list>
 
         /// <summary>
         /// Updates a specific job and marks it as done.
@@ -59,15 +61,16 @@ module DataLayer =
         /// Updates a specific job and marks it as in-flight.
         /// Also update the last updated timestamp.
         /// </summary>
-        /// <param name="job">The job to mark as in-flight.</param>
-        abstract member SetInFlight: Job.JobRecord -> Task
-
-        /// <summary>
-        /// Updates a specific job and marks it as in-flight.
-        /// Also update the last updated timestamp.
-        /// </summary>
         /// <param name="job">The job to mark as failed.</param>
         abstract member SetFailed: Job.JobRecord -> Task
+
+        /// <summary>
+        /// Releases a claimed (InFlight) job back to Waiting without counting
+        /// it as a retry. Used when a job was claimed but never ran to completion,
+        /// e.g. during graceful shutdown.
+        /// </summary>
+        /// <param name="job">The job to release.</param>
+        abstract member Release: Job.JobRecord -> Task
 
         /// <summary>
         /// Resets a failed job back to Waiting for retry.
@@ -96,6 +99,29 @@ module DataLayer =
         /// </summary>
         abstract member ScheduleWithDedup: 't -> DateTime -> string -> Task<bool>
 
+        /// <summary>
+        /// Inserts or updates a recurring job definition by name.
+        /// If a definition with the same name and schedule exists, its next run time
+        /// is preserved (only the task payload is updated); if the schedule changed,
+        /// the next run time is recomputed from now.
+        /// </summary>
+        abstract member UpsertRecurring: Recurring.RecurringJob<'t> -> Task
+
+        /// <summary>
+        /// Removes a recurring job definition by name. Returns false if no such
+        /// definition exists. Already-enqueued occurrences are unaffected.
+        /// </summary>
+        abstract member RemoveRecurring: string -> Task<bool>
+
+        /// <summary>
+        /// Enqueues a normal job for every recurring definition due at the given UTC time
+        /// and advances each definition's next run. Occurrences carry a dedup key derived
+        /// from the definition name, so a still-active previous occurrence suppresses the
+        /// new one (the next run still advances). Returns the number of jobs enqueued.
+        /// Called by the scheduler on every poll.
+        /// </summary>
+        abstract member EnqueueDueRecurring: DateTime -> Task<int>
+
     type JobQuery =
         { Status: Job.Status option
           Page: int
@@ -109,12 +135,19 @@ module DataLayer =
           AverageDurationSeconds: float option
           JobsCompletedLastHour: int }
 
+    /// Outcome of putting a job back into the Waiting state from the dashboard.
+    type JobActionResult =
+        | Succeeded
+        | NotFound
+        /// The job has a dedup key and another Waiting/InFlight job already holds it.
+        | DuplicateActive
+
     type IDashboardDataLayer =
         abstract member QueryJobs: JobQuery -> Task<Job.JobRecord list * int>
         abstract member GetJob: Guid -> Task<Job.JobRecord option>
         abstract member GetStats: unit -> Task<JobStats>
-        abstract member RetryJob: Guid -> Task<bool>
-        abstract member RequeueJob: Guid -> Task<bool>
+        abstract member RetryJob: Guid -> Task<JobActionResult>
+        abstract member RequeueJob: Guid -> Task<JobActionResult>
         abstract member DeleteJob: Guid -> Task<bool>
         abstract member PurgeJobs: Job.Status -> TimeSpan -> Task<int>
 
@@ -123,14 +156,17 @@ module DataLayer =
             member this.Setup () = Task.CompletedTask
             member this.Register _ = Task.CompletedTask
             member this.Schedule _ _ = Task.CompletedTask
-            member this.Poll () = Task.FromResult([])
+            member this.Poll _ = Task.FromResult([])
             member this.SetDone _ = Task.CompletedTask
-            member this.SetInFlight _ = Task.CompletedTask
             member this.SetFailed _ = Task.CompletedTask
+            member this.Release _ = Task.CompletedTask
             member this.RegisterSafe _ _ = Task.CompletedTask
             member this.ScheduleSafe _ _ _ = Task.CompletedTask
             member this.SetRetry _ _ = Task.CompletedTask
             member this.ReclaimStale _ = Task.FromResult(0)
             member this.RegisterWithDedup _ _ = Task.FromResult(true)
             member this.ScheduleWithDedup _ _ _ = Task.FromResult(true)
+            member this.UpsertRecurring _ = Task.CompletedTask
+            member this.RemoveRecurring _ = Task.FromResult(false)
+            member this.EnqueueDueRecurring _ = Task.FromResult(0)
     }

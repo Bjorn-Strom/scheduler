@@ -44,14 +44,14 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
     member _.``Register then Poll returns job`` () =
         let dl = createDl ()
         dl.Register(Add(1, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         Assert.True(List.length jobs >= 1)
 
     [<Fact>]
     member _.``Registered job has correct deserialized task`` () =
         let dl = createDl ()
         dl.Register(Add(99, 1)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(99, 1))
         Assert.True(found, "Should find registered task in polled jobs")
@@ -60,7 +60,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
     member _.``Schedule future job not returned by Poll`` () =
         let dl = createDl ()
         dl.Schedule (Add(7, 7)) (DateTime.UtcNow.AddHours 1.0) |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(7, 7))
         Assert.False(found, "Future-scheduled job should not appear in Poll")
@@ -69,7 +69,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
     member _.``Schedule past job returned by Poll`` () =
         let dl = createDl ()
         dl.Schedule (Add(8, 8)) (DateTime.UtcNow.AddHours -1.0) |> fun t -> t.Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(8, 8))
         Assert.True(found, "Past-scheduled job should appear in Poll")
@@ -78,35 +78,43 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
     member _.``SetDone removes job from Poll`` () =
         let dl = createDl ()
         dl.Register(Add(50, 50)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let target = jobs |> List.find (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(50, 50))
         dl.SetDone(target).Wait()
-        let after = dl.Poll().Result
+        let after = dl.Poll(100).Result
         let stillThere = after |> List.exists (fun j -> j.Id = target.Id)
         Assert.False(stillThere, "Done job should not appear in Poll")
 
     [<Fact>]
-    member _.``SetInFlight removes job from Poll`` () =
+    member _.``Release returns claimed job to Poll`` () =
         let dl = createDl ()
         dl.Register(Add(51, 51)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let target = jobs |> List.find (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(51, 51))
-        dl.SetInFlight(target).Wait()
-        let after = dl.Poll().Result
-        let stillThere = after |> List.exists (fun j -> j.Id = target.Id)
-        Assert.False(stillThere, "InFlight job should not appear in Poll")
+        dl.Release(target).Wait()
+        let after = dl.Poll(100).Result
+        let backAgain = after |> List.exists (fun j -> j.Id = target.Id)
+        Assert.True(backAgain, "Released job should be claimable again")
+
+    [<Fact>]
+    member _.``Poll respects maxCount`` () =
+        let dl = createDl ()
+        for i in 1..5 do
+            dl.Register(Add(6000 + i, 6000 + i)).Wait()
+        let jobs = dl.Poll(2).Result
+        Assert.Equal(2, List.length jobs)
 
     [<Fact>]
     member _.``SetFailed removes job from Poll`` () =
         let dl = createDl ()
         dl.Register(Add(52, 52)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let target = jobs |> List.find (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(52, 52))
         dl.SetFailed(target).Wait()
-        let after = dl.Poll().Result
+        let after = dl.Poll(100).Result
         let stillThere = after |> List.exists (fun j -> j.Id = target.Id)
         Assert.False(stillThere, "Failed job should not appear in Poll")
 
@@ -116,7 +124,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         dl.Register(Add(60, 1)).Wait()
         dl.Register(Add(60, 2)).Wait()
         dl.Register(Add(60, 3)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let count = jobs |> List.filter (fun j ->
             let t = Evaluator.deserialize<TestTask> j.Task
             match t with Add(60, _) -> true | _ -> false) |> List.length
@@ -130,7 +138,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         use txn = conn.BeginTransaction()
         dl.RegisterSafe (Add(70, 70)) txn |> fun t -> t.Wait()
         txn.Commit()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(70, 70))
         Assert.True(found)
@@ -143,7 +151,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         use txn = conn.BeginTransaction()
         dl.RegisterSafe (Add(71, 71)) txn |> fun t -> t.Wait()
         txn.Rollback()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(71, 71))
         Assert.False(found, "Rolled back job should not be in Poll")
@@ -156,7 +164,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         use txn = conn.BeginTransaction()
         dl.ScheduleSafe (Add(72, 72)) (DateTime.UtcNow.AddHours -1.0) txn |> fun t -> t.Wait()
         txn.Commit()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(72, 72))
         Assert.True(found)
@@ -169,7 +177,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         use txn = conn.BeginTransaction()
         dl.ScheduleSafe (Add(73, 73)) (DateTime.UtcNow.AddHours -1.0) txn |> fun t -> t.Wait()
         txn.Rollback()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(73, 73))
         Assert.False(found, "Rolled back scheduled job should not be in Poll")
@@ -211,7 +219,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         use txn = conn.BeginTransaction()
         dl.ScheduleSafe (Add(74, 74)) (DateTime.UtcNow.AddHours 1.0) txn |> fun t -> t.Wait()
         txn.Commit()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(74, 74))
         Assert.False(found, "Future-scheduled safe job should not appear in Poll")
@@ -221,7 +229,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         // createDl calls Setup which creates table, but we use unique values
         // to distinguish from other tests. A fresh poll should not find our marker.
         let dl = createDl ()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let found = jobs |> List.exists (fun j ->
             Evaluator.deserialize<TestTask> j.Task = Add(999, 999))
         Assert.False(found)
@@ -231,7 +239,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         let dl = createDl ()
         dl.Register(Add(80, 1)).Wait()
         dl.Register(Add(80, 2)).Wait()
-        let jobs = dl.Poll().Result
+        let jobs = dl.Poll(100).Result
         let claimed = jobs |> List.filter (fun j ->
             let t = Evaluator.deserialize<TestTask> j.Task
             match t with Add(80, _) -> true | _ -> false)
@@ -240,7 +248,7 @@ type MSSQLDataLayerTests(fixture: MSSQLFixture) =
         for j in claimed do
             Assert.Equal(Job.InFlight, j.Status)
         // Second poll should not return them again
-        let after = dl.Poll().Result
+        let after = dl.Poll(100).Result
         let reclaimed = after |> List.exists (fun j ->
             claimed |> List.exists (fun c -> c.Id = j.Id))
         Assert.False(reclaimed, "Already claimed jobs should not reappear in Poll")
@@ -259,7 +267,7 @@ type MSSQLDashboardTests(fixture: MSSQLFixture) =
         dl.Register(Add(200, 1)).Wait()
         dl.Register(Add(200, 2)).Wait()
         // Poll to move to InFlight so we can SetDone
-        dl.Poll().Result |> ignore
+        dl.Poll(100).Result |> ignore
         let jobs, total = (dash dl).QueryJobs({ Status = None; Page = 1; PageSize = 100 }).Result
         Assert.True(total >= 2)
         Assert.True(jobs.Length >= 2)
@@ -268,7 +276,7 @@ type MSSQLDashboardTests(fixture: MSSQLFixture) =
     member _.``QueryJobs filters by status`` () =
         let dl = createDl ()
         dl.Register(Add(201, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(201, 1))
         dl.SetDone(target).Wait()
         let jobs, _ = (dash dl).QueryJobs({ Status = Some Job.Done; Page = 1; PageSize = 100 }).Result
@@ -279,7 +287,7 @@ type MSSQLDashboardTests(fixture: MSSQLFixture) =
     member _.``GetJob returns existing job`` () =
         let dl = createDl ()
         dl.Register(Add(202, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(202, 1))
         let found = (dash dl).GetJob(target.Id).Result
         Assert.True(found.IsSome)
@@ -295,28 +303,41 @@ type MSSQLDashboardTests(fixture: MSSQLFixture) =
     member _.``RetryJob resets failed job`` () =
         let dl = createDl ()
         dl.Register(Add(203, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(203, 1))
         dl.SetFailed(target).Wait()
         let result = (dash dl).RetryJob(target.Id).Result
-        Assert.True(result)
+        Assert.Equal(JobActionResult.Succeeded, result)
         let job = (dash dl).GetJob(target.Id).Result
         Assert.Equal(Job.Waiting, job.Value.Status)
 
     [<Fact>]
-    member _.``RetryJob returns false for non-failed`` () =
+    member _.``RetryJob returns NotFound for non-failed`` () =
         let dl = createDl ()
         dl.Register(Add(204, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(204, 1))
         let result = (dash dl).RetryJob(target.Id).Result
-        Assert.False(result)
+        Assert.Equal(JobActionResult.NotFound, result)
+
+    [<Fact>]
+    member _.``RequeueJob returns DuplicateActive when dedup key is held by an active job`` () =
+        let dl = createDl ()
+        Assert.True(dl.RegisterWithDedup (Add(401, 1)) "mssql-dup-key" |> fun t -> t.Result)
+        let polled = dl.Poll(100).Result
+        let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(401, 1))
+        dl.SetDone(target).Wait()
+        Assert.True(dl.RegisterWithDedup (Add(401, 2)) "mssql-dup-key" |> fun t -> t.Result)
+        let result = (dash dl).RequeueJob(target.Id).Result
+        Assert.Equal(JobActionResult.DuplicateActive, result)
+        let job = (dash dl).GetJob(target.Id).Result
+        Assert.Equal(Job.Done, job.Value.Status)
 
     [<Fact>]
     member _.``DeleteJob removes job`` () =
         let dl = createDl ()
         dl.Register(Add(205, 1)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let target = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(205, 1))
         let result = (dash dl).DeleteJob(target.Id).Result
         Assert.True(result)
@@ -329,9 +350,61 @@ type MSSQLDashboardTests(fixture: MSSQLFixture) =
         let d = dash dl
         dl.Register(Add(206, 1)).Wait()
         dl.Register(Add(206, 2)).Wait()
-        let polled = dl.Poll().Result
+        let polled = dl.Poll(100).Result
         let t1 = polled |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(206, 1))
         dl.SetDone(t1).Wait()
         let stats = d.GetStats().Result
         Assert.True(stats.DoneCount >= 1)
         Assert.True(stats.InFlightCount >= 1)
+
+type MSSQLRecurringTests(fixture: MSSQLFixture) =
+    let createDl () = MSSQL.create<TestTask>(fixture.ConnectionString)
+
+    interface IClassFixture<MSSQLFixture>
+
+    [<Fact>]
+    member _.``Due recurring definition enqueues an occurrence with dedup key`` () =
+        let dl = createDl ()
+        dl.UpsertRecurring({ Name = "mssql-tick"; Task = Add(500, 1); Schedule = Every (TimeSpan.FromMinutes 5.0) }).Wait()
+        let enqueued = dl.EnqueueDueRecurring(DateTime.UtcNow.AddMinutes 6.0).Result
+        Assert.Equal(1, enqueued)
+        let jobs = dl.Poll(100).Result
+        let occurrence = jobs |> List.find (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(500, 1))
+        Assert.Equal(Some "recurring:mssql-tick", occurrence.DedupKey)
+
+    [<Fact>]
+    member _.``Definition does not fire before it is due`` () =
+        let dl = createDl ()
+        dl.UpsertRecurring({ Name = "mssql-later"; Task = Add(501, 1); Schedule = Every (TimeSpan.FromHours 12.0) }).Wait()
+        dl.EnqueueDueRecurring(DateTime.UtcNow).Result |> ignore
+        let jobs = dl.Poll(100).Result
+        let fired = jobs |> List.exists (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(501, 1))
+        Assert.False(fired, "Occurrence should not be enqueued before NextRun")
+
+    [<Fact>]
+    member _.``Still-active occurrence suppresses the next firing`` () =
+        let dl = createDl ()
+        dl.UpsertRecurring({ Name = "mssql-overlap"; Task = Add(502, 1); Schedule = Every (TimeSpan.FromMinutes 1.0) }).Wait()
+        let first = DateTime.UtcNow.AddMinutes 2.0
+        dl.EnqueueDueRecurring(first).Result |> ignore
+        // The occurrence is still Waiting (not polled); firing again must not stack a second one
+        let second = first.AddMinutes 2.0
+        dl.EnqueueDueRecurring(second).Result |> ignore
+        let jobs = dl.Poll(100).Result
+        let occurrences = jobs |> List.filter (fun j -> Evaluator.deserialize<TestTask> j.Task = Add(502, 1))
+        Assert.Single(occurrences) |> ignore
+
+    [<Fact>]
+    member _.``RemoveRecurring deletes the definition`` () =
+        let dl = createDl ()
+        dl.UpsertRecurring({ Name = "mssql-remove"; Task = Add(503, 1); Schedule = Every (TimeSpan.FromMinutes 1.0) }).Wait()
+        Assert.True(dl.RemoveRecurring("mssql-remove").Result)
+        Assert.False(dl.RemoveRecurring("mssql-remove").Result)
+
+    [<Fact>]
+    member _.``Upsert is idempotent for the same definition`` () =
+        let dl = createDl ()
+        let definition : Recurring.RecurringJob<TestTask> = { Name = "mssql-upsert"; Task = Add(504, 1); Schedule = Cron "0 3 * * *" }
+        dl.UpsertRecurring(definition).Wait()
+        dl.UpsertRecurring(definition).Wait()
+        Assert.True(dl.RemoveRecurring("mssql-upsert").Result)
